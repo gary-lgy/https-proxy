@@ -1,0 +1,15 @@
+# IntelliJ project files
+.idea
+*.iml
+
+# Binary files
+out
+
+# Object files
+*.o
+
+# macOS template
+.DS_Store
+
+# Thumbnails
+._*
