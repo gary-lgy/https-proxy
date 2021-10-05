@@ -1,0 +1,7 @@
+---
+BasedOnStyle:  Chromium
+AlignAfterOpenBracket: AlwaysBreak
+BinPackArguments: false
+BinPackParameters: false
+ColumnLimit:     120
+---
