@@ -1,12 +1,20 @@
 CC = /usr/bin/gcc
-CFLAGS = --std=c11 -Wall
+CFLAGS = -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
+SRC_FILES = proxy.c error.c
 OUT_DIR = out
+BIN = proxy
 
-all: proxy
+.PHONY: all debug_build build clean
 
-proxy:
+all: debug_build
+
+debug_build: clean
 	mkdir -p $(OUT_DIR)
-	$(CC) $(CFLAGS) -o $(OUT_DIR)/proxy proxy.c $(LFLAGS)
+	$(CC) $(CFLAGS) -g -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
+
+build: clean
+	mkdir -p $(OUT_DIR)
+	$(CC) $(CFLAGS) -DNDEBUG -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
 
 clean:
 	rm -rf $(OUT_DIR)
