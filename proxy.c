@@ -17,11 +17,14 @@ int main(int argc, char** argv) {
     exit(EXIT_FAILURE);
   }
 
-  int listen_port = strtol(argv[1], NULL, 0);
-  if (errno == EINVAL) {
-    fprintf(stderr, "invalid port number: %s", argv[1]);
+  char* endptr;
+  int listen_port = strtol(argv[1], &endptr, 10);
+  if (*endptr != '\0') {
+    fprintf(stderr, "invalid port number: %s\n", argv[1]);
     exit(EXIT_FAILURE);
   }
+
+  printf("Listening on port %d\n", listen_port);
 
   int listen_socket = socket(AF_INET, SOCK_STREAM, 0);
   check_err(listen_socket, "failed to create listen socket");
@@ -47,9 +50,9 @@ int main(int argc, char** argv) {
 
   check_err(write(client_socket, read_buffer, n_bytes_read), "failed to write to client socket");
 
-  check_err(close(client_socket), "Failed to close client socket");
+  check_err(close(client_socket), "failed to close client socket");
 
-  check_err(close(listen_socket), "Failed to close listen socket");
+  check_err(close(listen_socket), "failed to close listen socket");
 
   return 0;
 }
@@ -57,6 +60,6 @@ int main(int argc, char** argv) {
 void check_err(int status, const char* message) {
   if (status < 0) {
     perror(message);
-    exit(1);
+    exit(EXIT_FAILURE);
   }
 }
