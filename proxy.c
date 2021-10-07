@@ -1,11 +1,12 @@
 #include <arpa/inet.h>
-#include <ctype.h>
+#include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "error.h"
+#include "http_connect.h"
 #include "log.h"
 
 #define CONNECT_BACKLOG 512
@@ -16,9 +17,9 @@ inline __attribute__((always_inline)) void die(const char* message) {
   exit(EXIT_FAILURE);
 }
 
-int parse_port_number(struct error** err, const char* raw) {
+int parse_port_number(struct error** err, const char* raw, unsigned short* port) {
   char* endptr;
-  int port = (int)strtol(raw, &endptr, 10);
+  *port = strtol(raw, &endptr, 10);
   if (*endptr != '\0') {
     if (err != NULL) {
       char* msg;
@@ -28,10 +29,10 @@ int parse_port_number(struct error** err, const char* raw) {
     return -1;
   }
 
-  return port;
+  return 0;
 }
 
-int tcp_listen(struct error** err, int port) {
+int tcp_listen(struct error** err, unsigned short port) {
   int listen_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (listen_socket < 0) {
     if (err != NULL) {
@@ -104,15 +105,14 @@ int tcp_connect(struct error** err, const struct sockaddr_in* remote_addr) {
   return sock;
 }
 
-int lookup_host_addr(struct error** err, const char* hostname, struct addrinfo** results) {
+int lookup_host_addr(struct error** err, const char* hostname, const char* port, struct addrinfo** results) {
   struct addrinfo hints;
   memset(&hints, 0, sizeof(struct addrinfo));
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
 
-  // TODO: what to do with port number?
-  int gai_errno = getaddrinfo(hostname, "http", &hints, results);
+  int gai_errno = getaddrinfo(hostname, port, &hints, results);
   if (gai_errno != 0) {
     if (err != NULL) {
       *err = new_error(append_error_messages("host resolution failed", gai_strerror(gai_errno)), NULL);
@@ -123,10 +123,10 @@ int lookup_host_addr(struct error** err, const char* hostname, struct addrinfo**
   return 0;
 }
 
-int tcp_connect_using_hostname(struct error** err, const char* hostname) {
+int tcp_connect_to_target(struct error** err, const char* hostname, const char* port) {
   struct addrinfo *host_addrs, *rp;
 
-  if (lookup_host_addr(err, hostname, &host_addrs) < 0) {
+  if (lookup_host_addr(err, hostname, port, &host_addrs) < 0) {
     return -1;
   }
 
@@ -147,6 +147,46 @@ int tcp_connect_using_hostname(struct error** err, const char* hostname) {
   }
 
   return sock;
+}
+
+int handle_connect_request(
+    struct error** err,
+    int sock,
+    char* read_buffer,
+    size_t buffer_len,
+    const char** hostname,
+    const char** port) {
+  // TODO: convert to async
+  size_t n_bytes_read = 0;
+
+  while (1) {
+    char* next_ptr = read_buffer + n_bytes_read;
+    size_t remaining_capacity = buffer_len - 1 - n_bytes_read;
+
+    ssize_t n_bytes_read_this_time = read(sock, next_ptr, remaining_capacity);
+    if (n_bytes_read_this_time < 0) {
+      if (errno == EINTR) {
+        // interrupted by signal, try again
+        continue;
+      }
+      if (err != NULL) {
+        *err = new_error_from_errno("failed to read from client socket");
+      }
+      return -1;
+    }
+
+    n_bytes_read += n_bytes_read_this_time;
+    read_buffer[n_bytes_read] = '\0';
+    char* double_crlf = strstr(read_buffer, "\r\n\r\n");
+    if (double_crlf != NULL) {
+      // received full CONNECT message
+      if (parse_http_connect_message(read_buffer, hostname, port) < 0) {
+        // malformed CONNECT
+        return -1;
+      }
+      return 0;
+    }
+  }
 }
 
 void http_get(int sock, const char* path) {
@@ -173,8 +213,8 @@ int main(int argc, char** argv) {
 
   struct error* err;
 
-  int listen_port = parse_port_number(&err, argv[1]);
-  if (listen_port < 0) {
+  unsigned short listen_port;
+  if (parse_port_number(&err, argv[1], &listen_port) < 0) {
     die(format_error_messages(err));
   }
 
@@ -182,7 +222,7 @@ int main(int argc, char** argv) {
   if (listen_socket < 0) {
     die(format_error_messages(err));
   }
-  printf("Listening on port %d\n", listen_port);
+  printf("Listening on port %hu\n", listen_port);
 
   int client_socket = accept_client_socket(&err, listen_socket);
   if (client_socket < 0) {
@@ -190,29 +230,18 @@ int main(int argc, char** argv) {
   }
 
   char read_buffer[READ_BUFFER_SIZE];
-  int n_bytes_read = read(client_socket, read_buffer, READ_BUFFER_SIZE - 1);
-  if (n_bytes_read < 0) {
-    die("failed to read from client socket");
-  }
-  read_buffer[n_bytes_read] = '\0';
+  const char* target_host;
+  const char* target_port;
+  handle_connect_request(NULL, client_socket, read_buffer, READ_BUFFER_SIZE, &target_host, &target_port);
 
-  // Trim whitespace from hostname
-  char* hostname = read_buffer + n_bytes_read - 1;
-  while (isspace(*hostname)) {
-    hostname--;
-  }
-  *(hostname + 1) = '\0';
-  hostname = read_buffer;
-  while (*hostname != '\0' && isspace(*hostname)) {
-    hostname++;
-  }
+  DEBUG_LOG("received CONNECT request: %s:%s", target_host, target_port);
 
-  int server_socket = tcp_connect_using_hostname(&err, read_buffer);
+  int server_socket = tcp_connect_to_target(&err, target_host, target_port);
   if (server_socket < 0) {
     die(format_error_messages(err));
   }
 
-  http_get(server_socket, hostname);
+  http_get(server_socket, target_host);
   relay_http_response(client_socket, server_socket);
 
   if (close(client_socket) < 0) {
