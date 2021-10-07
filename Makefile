@@ -1,6 +1,6 @@
 CC = /usr/bin/gcc
 CFLAGS = -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
-SRC_FILES = proxy.c error.c
+SRC_FILES = proxy.c error.c util.c
 OUT_DIR = out
 BIN = proxy
 

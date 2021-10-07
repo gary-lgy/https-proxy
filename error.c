@@ -26,9 +26,12 @@ char* format_error_messages(const struct error* err) {
 
   char* formatted_message = malloc(total_len * sizeof(char));
   char* next_char = formatted_message;
-  for (const struct error* e = err; e != NULL; e = e->wrapped) {
+  const struct error* e;
+  for (e = err; e->wrapped != NULL; e = e->wrapped) {
     next_char = stpcpy(next_char, e->message);
+    next_char = stpcpy(next_char, ": ");
   }
+  stpcpy(next_char, e->message);
 
   return formatted_message;
 }

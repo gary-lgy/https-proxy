@@ -1,4 +1,0 @@
-#ifndef HTTPS_PROXY_UTIL_H
-#define HTTPS_PROXY_UTIL_H
-
-#endif  // HTTPS_PROXY_UTIL_H
