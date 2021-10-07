@@ -1,8 +1,11 @@
+#include "http_connect.h"
+#include <malloc.h>
 #include <string.h>
+#include <unistd.h>
 
-#define DEFAULT_HTTPS_PORT "80"
+#define DEFAULT_TARGET_PORT "80"
 
-int parse_http_connect_message(char* message, const char** host, const char** port) {
+int parse_http_connect_message(char* message, struct http_connect_request* result) {
   // CONNECT google.com:443 HTTP/1.0
   char* saveptr;
   char* token = strtok_r(message, " ", &saveptr);
@@ -10,20 +13,32 @@ int parse_http_connect_message(char* message, const char** host, const char** po
     return -1;
   }
 
-  char* hostname_token = strtok_r(NULL, " ", &saveptr);
+  char* host_port_token = strtok_r(NULL, " ", &saveptr);
   char* host_port_saveptr;
-  *host = strdup(strtok_r(hostname_token, ":", &host_port_saveptr));
-  *port = strtok_r(NULL, ":", &host_port_saveptr);
-  if (*port == NULL) {
-    // port not specified
-    *port = DEFAULT_HTTPS_PORT;
+  const char* host = strtok_r(host_port_token, ":", &host_port_saveptr);
+  const char* port = strtok_r(NULL, ":", &host_port_saveptr);
+  if (port == NULL) {
+    port = DEFAULT_TARGET_PORT;
   }
 
   // HTTP/1.1 or HTTP/1.0
-  token = strtok_r(NULL, " ", &saveptr);
-  if (token == NULL || (strcmp(token, "HTTP/1.0") != 0 || strcmp(token, "HTTP/1.1") != 0)) {
+  const char* http_version = strtok_r(NULL, " \r\n", &saveptr);
+  if (http_version == NULL || (strcmp(http_version, "HTTP/1.0") != 0 && strcmp(http_version, "HTTP/1.1") != 0)) {
     return -1;
   }
 
+  result->host = strdup(host);
+  result->port = strdup(port);
+  result->http_version = strdup(http_version);
+
+  return 0;
+}
+
+int send_successful_connect_response(int sock, const struct http_connect_request* request) {
+  char* response_line;
+  int response_size = asprintf(&response_line, "%s 200 Connection established \r\n\r\n", request->http_version);
+
+  write(sock, response_line, response_size);
+  free(response_line);
   return 0;
 }

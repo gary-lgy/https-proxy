@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,7 +101,7 @@ int tcp_connect(struct error** err, const struct sockaddr_in* remote_addr) {
     return -1;
   }
 
-  DEBUG_LOG("connected to server: %s:%hu", inet_ntoa(remote_addr->sin_addr), ntohs(remote_addr->sin_port));
+  DEBUG_LOG("tcp connected to %s:%hu", inet_ntoa(remote_addr->sin_addr), ntohs(remote_addr->sin_port));
 
   return sock;
 }
@@ -123,10 +124,10 @@ int lookup_host_addr(struct error** err, const char* hostname, const char* port,
   return 0;
 }
 
-int tcp_connect_to_target(struct error** err, const char* hostname, const char* port) {
+int tcp_connect_to_target(struct error** err, const struct http_connect_request* request) {
   struct addrinfo *host_addrs, *rp;
 
-  if (lookup_host_addr(err, hostname, port, &host_addrs) < 0) {
+  if (lookup_host_addr(err, request->host, request->port, &host_addrs) < 0) {
     return -1;
   }
 
@@ -154,8 +155,7 @@ int handle_connect_request(
     int sock,
     char* read_buffer,
     size_t buffer_len,
-    const char** hostname,
-    const char** port) {
+    struct http_connect_request* result) {
   // TODO: convert to async
   size_t n_bytes_read = 0;
 
@@ -180,7 +180,7 @@ int handle_connect_request(
     char* double_crlf = strstr(read_buffer, "\r\n\r\n");
     if (double_crlf != NULL) {
       // received full CONNECT message
-      if (parse_http_connect_message(read_buffer, hostname, port) < 0) {
+      if (parse_http_connect_message(read_buffer, result) < 0) {
         // malformed CONNECT
         return -1;
       }
@@ -189,21 +189,25 @@ int handle_connect_request(
   }
 }
 
-void http_get(int sock, const char* path) {
-  char* request_line;
-  int request_size = asprintf(&request_line, "GET %s HTTP/1.0\r\n\r\n", path);
-
-  DEBUG_LOG("request: %s", request_line);
-
-  write(sock, request_line, request_size);
+void relay_sockets(int read_sock, int write_sock) {
+  DEBUG_LOG("relaying data from %d to %d", read_sock, write_sock);
+  char buffer[READ_BUFFER_SIZE];
+  while (1) {
+    ssize_t bytes_read = read(read_sock, buffer, sizeof(buffer));
+    if (bytes_read <= 0) {
+      return;
+    }
+    DEBUG_LOG("received %zu bytes from fd %d", bytes_read, read_sock);
+    ssize_t bytes_written = write(write_sock, buffer, bytes_read);
+    DEBUG_LOG("wrote %zu bytes to fd %d", bytes_written, write_sock);
+  }
+  DEBUG_LOG("stopping relay from %d to %d", read_sock, write_sock);
 }
 
-void relay_http_response(int client_socket, int server_socket) {
-  char buffer[READ_BUFFER_SIZE];
-  int bytes_read;
-  while ((bytes_read = read(server_socket, buffer, READ_BUFFER_SIZE - 1)) > 0) {
-    write(client_socket, buffer, bytes_read);
-  }
+void* thread_func(void* args) {
+  int* sockets = args;
+  relay_sockets(sockets[0], sockets[1]);
+  pthread_exit(NULL);
 }
 
 int main(int argc, char** argv) {
@@ -230,19 +234,27 @@ int main(int argc, char** argv) {
   }
 
   char read_buffer[READ_BUFFER_SIZE];
-  const char* target_host;
-  const char* target_port;
-  handle_connect_request(NULL, client_socket, read_buffer, READ_BUFFER_SIZE, &target_host, &target_port);
+  struct http_connect_request request;
+  // TODO: some bytes are discarded, should forward them to the target server
+  handle_connect_request(NULL, client_socket, read_buffer, sizeof(read_buffer), &request);
 
-  DEBUG_LOG("received CONNECT request: %s:%s", target_host, target_port);
+  DEBUG_LOG("received CONNECT request: %s %s:%s", request.http_version, request.host, request.port);
 
-  int server_socket = tcp_connect_to_target(&err, target_host, target_port);
+  int server_socket = tcp_connect_to_target(&err, &request);
   if (server_socket < 0) {
     die(format_error_messages(err));
   }
 
-  http_get(server_socket, target_host);
-  relay_http_response(client_socket, server_socket);
+  send_successful_connect_response(client_socket, &request);
+
+  int client_to_server[2] = {client_socket, server_socket};
+  int server_to_client[2] = {server_socket, client_socket};
+
+  pthread_t worker1, worker2;
+  pthread_create(&worker1, NULL, thread_func, server_to_client);
+  pthread_create(&worker2, NULL, thread_func, client_to_server);
+  pthread_join(worker1, NULL);
+  pthread_join(worker2, NULL);
 
   if (close(client_socket) < 0) {
     die("failed to close client socket");

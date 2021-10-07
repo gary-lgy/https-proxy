@@ -1,5 +1,6 @@
 CC = /usr/bin/gcc
 CFLAGS = -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
+LFLAGS = -lpthread
 SRC_FILES = proxy.c error.c http_connect.c log.c
 OUT_DIR = out
 BIN = proxy
