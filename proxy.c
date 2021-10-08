@@ -164,6 +164,7 @@ ssize_t handle_connect_request(
     size_t buffer_len,
     struct http_connect_request* result) {
   // TODO: convert to async
+  // TODO: think about what to do if we can't fit the connect message into the buffer
   char* read_buffer = *read_buffer_ptr;
   ssize_t n_bytes_read = 0;
 
@@ -172,11 +173,15 @@ ssize_t handle_connect_request(
     size_t remaining_capacity = buffer_len - 1 - n_bytes_read;
 
     ssize_t n_bytes_read_this_time = read(sock, next_ptr, remaining_capacity);
-    if (n_bytes_read_this_time < 0) {
+    if (n_bytes_read_this_time == 0) {
+      DEBUG_LOG("client closed the socket while we're reading CONNECT");
+      return -1;
+    } else if (n_bytes_read_this_time < 0) {
       if (errno == EINTR) {
         // interrupted by signal, try again
         continue;
       }
+      DEBUG_LOG("reading for CONNECT failed: %s", strerror(errno));
       if (err != NULL) {
         *err = new_error_from_errno("failed to read from client socket");
       }
@@ -185,6 +190,9 @@ ssize_t handle_connect_request(
 
     n_bytes_read += n_bytes_read_this_time;
     read_buffer[n_bytes_read] = '\0';
+
+    DEBUG_LOG("received %d bytes, message is now %s", n_bytes_read_this_time, read_buffer);
+
     char* double_crlf = strstr(read_buffer, "\r\n\r\n");
     if (double_crlf != NULL) {
       // received full CONNECT message
@@ -217,9 +225,64 @@ void relay_sockets(int read_sock, int write_sock) {
   DEBUG_LOG("stopping relay from %d to %d", read_sock, write_sock);
 }
 
-void* thread_func(void* args) {
+void* relay_sockets_thread_func_wrapper(void* args) {
   int* sockets = args;
-  relay_sockets(sockets[0], sockets[1]);
+  int read_socket = sockets[0], write_socket = sockets[1];
+  free(args);
+  relay_sockets(read_socket, write_socket);
+  pthread_exit(NULL);
+}
+
+void handle_client_socket(int client_socket) {
+  char read_buffer[READ_BUFFER_SIZE];
+  char* next_char = read_buffer;
+  struct http_connect_request request;
+  ssize_t bytes_remaining = handle_connect_request(NULL, client_socket, &next_char, sizeof(read_buffer), &request);
+  if (bytes_remaining < 0) {
+    DEBUG_LOG("couldn't read CONNECT message, aborting request with 400");
+    return;
+  }
+
+  DEBUG_LOG("received CONNECT request: %s %s:%s", request.http_version, request.host, request.port);
+
+  int server_socket = tcp_connect_to_target(NULL, &request);
+  if (server_socket < 0) {
+    return;
+  }
+
+  send_successful_connect_response(client_socket, &request);
+
+  // send the left-over bytes we read from the client to the server
+  if (bytes_remaining > 0) {
+    DEBUG_LOG("sending %d left over bytes after CONNECT", bytes_remaining);
+    if (write(server_socket, next_char, bytes_remaining) < 0) {
+      die("failed to send left over bytes from CONNECT");
+    }
+  }
+
+  int* server_to_client = malloc(2 * sizeof(int));
+  server_to_client[0] = server_socket;
+  server_to_client[1] = client_socket;
+
+  pthread_t worker;
+  pthread_create(&worker, NULL, relay_sockets_thread_func_wrapper, server_to_client);
+  relay_sockets(client_socket, server_socket);
+  pthread_join(worker, NULL);
+
+  if (close(client_socket) < 0) {
+    die(format_error_messages(new_error_from_errno("failed to close client socket")));
+  }
+  if (close(server_socket) < 0) {
+    die(format_error_messages(new_error_from_errno("failed to close server socket")));
+  }
+
+  DEBUG_LOG("tunnel for client %s:%s closed", request.host, request.port);
+}
+
+void* handle_client_socket_thread_func_wrapper(void* args) {
+  int client_socket = *((int*)args);
+  free(args);
+  handle_client_socket(client_socket);
   pthread_exit(NULL);
 }
 
@@ -241,48 +304,19 @@ int main(int argc, char** argv) {
   }
   printf("Listening on port %hu\n", listen_port);
 
-  int client_socket = accept_client_socket(&err, listen_socket);
-  if (client_socket < 0) {
-    die(format_error_messages(err));
-  }
-
-  char read_buffer[READ_BUFFER_SIZE];
-  char* next_char = read_buffer;
-  struct http_connect_request request;
-  // TODO: some bytes are discarded, should forward them to the target server
-  ssize_t bytes_remaining = handle_connect_request(NULL, client_socket, &next_char, sizeof(read_buffer), &request);
-
-  DEBUG_LOG("received CONNECT request: %s %s:%s", request.http_version, request.host, request.port);
-
-  int server_socket = tcp_connect_to_target(&err, &request);
-  if (server_socket < 0) {
-    die(format_error_messages(err));
-  }
-
-  send_successful_connect_response(client_socket, &request);
-
-  // send the left over bytes we read from the client to the server
-  if (bytes_remaining > 0) {
-    if (write(server_socket, next_char, bytes_remaining) < 0) {
-      die("failed to send left over bytes from CONNECT");
+  while (1) {
+    int client_socket = accept_client_socket(&err, listen_socket);
+    if (client_socket < 0) {
+      die(format_error_messages(err));
+      break;
     }
+
+    int* thread_arg = malloc(sizeof(int));
+    *thread_arg = client_socket;
+    pthread_t worker;
+    pthread_create(&worker, NULL, handle_client_socket_thread_func_wrapper, thread_arg);
   }
 
-  int client_to_server[2] = {client_socket, server_socket};
-  int server_to_client[2] = {server_socket, client_socket};
-
-  pthread_t worker1, worker2;
-  pthread_create(&worker1, NULL, thread_func, server_to_client);
-  pthread_create(&worker2, NULL, thread_func, client_to_server);
-  pthread_join(worker1, NULL);
-  pthread_join(worker2, NULL);
-
-  if (close(client_socket) < 0) {
-    die(format_error_messages(new_error_from_errno("failed to close client socket")));
-  }
-  if (close(server_socket) < 0) {
-    die(format_error_messages(new_error_from_errno("failed to close server socket")));
-  }
   if (close(listen_socket) < 0) {
     die(format_error_messages(new_error_from_errno("failed to close listen socket")));
   }
