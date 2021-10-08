@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+if [ "$1" = "run" ]; then
+  PORT=44444
+  if [ -n "$2" ]; then
+    PORT="$2"
+  fi
+  ./out/proxy "$PORT"
+elif [ "$1" = "thread_count" ]; then
+  pgrep -u "$USER" proxy | xargs watch ps -o thcount
+else
+  echo "usage: $0 run [port] | thread_count"
+fi
