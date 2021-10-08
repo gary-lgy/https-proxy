@@ -1,0 +1,55 @@
+@startuml
+
+legend
+cc (client connection) - TCP connection between client and proxy
+tc (target connection) - TCP connection between proxy and target server
+end legend
+
+[*] --> accepted : incoming cc /\n accept cc
+
+accepted : epoll_wait on [cc (for CONNECT)]
+
+accepted --> connecting : received valid CONNECT message /\nstart tc
+accepted --> [*] : received invalid CONNECT message ||\n cc closed /\nclose cc
+
+connecting : epoll_wait on [tc (for connection) cc (for close)]
+
+connecting --> [*] : cc closed/\nclose cc
+connecting --> [*] : failed to connect to target /\nsend 404 and close cc
+
+connecting --> connected : tc connected
+
+connected : epoll_wait on [cc (for writing 200) and tc (for close)]
+
+connected --> [*] : writing 200 failed || tc closed /\nclose cc and tc
+
+state tunneling {
+
+    tunneling : reading from cc and writing to tc shares the same buffer
+    tunneling : reading from tc and writing to cc shares the same buffer
+    tunneling : if we're waiting to write to cc, don't read from tc
+    tunneling : if we're waiting to write to tc, don't read from cc
+
+    tc_rw : epoll_wait on [tc (waiting to read and write)]
+    cc_r_tc_r : epoll_wait on [cc(waiting to read), tc (waiting to read)]
+    cc_w_tc_w : epoll_wait on [cc(waiting to write), tc (waiting to write)]
+    cc_rw : epoll_wait on [cc (waiting to read and write)]
+
+    tc_rw --> cc_r_tc_r : wrote to tc /\nreceive from cc
+    tc_rw --> cc_w_tc_w : received from tc /\nwrite to cc
+
+    cc_r_tc_r --> tc_rw : received from cc /\nwrite to tc
+    cc_r_tc_r --> cc_rw : received from tc /\nwrite to cc
+
+    cc_w_tc_w --> tc_rw : wrote to cc /\nreceive from tc
+    cc_w_tc_w --> cc_rw : wrote to tc /\nreceive from cc
+
+    cc_rw --> cc_r_tc_r: wrote to cc /\nreceive from tc
+    cc_rw --> cc_w_tc_w: received from cc /\nwrite to tc
+}
+
+connected --> tc_rw : write 200 succeeded /\nsend the bytes right after CONNECT, if any
+
+tunneling -> [*] : either cc or tc closes /\n close cc and tc
+
+@enduml
