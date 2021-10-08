@@ -150,14 +150,22 @@ int tcp_connect_to_target(struct error** err, const struct http_connect_request*
   return sock;
 }
 
-int handle_connect_request(
+/** Read the connect request into the buffer pointed by *read_buffer_ptr.
+ * Upon return, *read_buffer_ptr will be updated to point to the first character in the buffer that is yet to be
+ * processed.
+ *
+ * Returns the number of characters left in the buffer.
+ */
+
+ssize_t handle_connect_request(
     struct error** err,
     int sock,
-    char* read_buffer,
+    char** read_buffer_ptr,
     size_t buffer_len,
     struct http_connect_request* result) {
   // TODO: convert to async
-  size_t n_bytes_read = 0;
+  char* read_buffer = *read_buffer_ptr;
+  ssize_t n_bytes_read = 0;
 
   while (1) {
     char* next_ptr = read_buffer + n_bytes_read;
@@ -184,7 +192,9 @@ int handle_connect_request(
         // malformed CONNECT
         return -1;
       }
-      return 0;
+      char* next_char = double_crlf + 4;  // skip over the double crlf
+      *read_buffer_ptr = next_char;
+      return n_bytes_read - (next_char - read_buffer);
     }
   }
 }
@@ -234,9 +244,10 @@ int main(int argc, char** argv) {
   }
 
   char read_buffer[READ_BUFFER_SIZE];
+  char* next_char = read_buffer;
   struct http_connect_request request;
   // TODO: some bytes are discarded, should forward them to the target server
-  handle_connect_request(NULL, client_socket, read_buffer, sizeof(read_buffer), &request);
+  ssize_t bytes_remaining = handle_connect_request(NULL, client_socket, &next_char, sizeof(read_buffer), &request);
 
   DEBUG_LOG("received CONNECT request: %s %s:%s", request.http_version, request.host, request.port);
 
@@ -246,6 +257,13 @@ int main(int argc, char** argv) {
   }
 
   send_successful_connect_response(client_socket, &request);
+
+  // send the left over bytes we read from the client to the server
+  if (bytes_remaining > 0) {
+    if (write(server_socket, next_char, bytes_remaining) < 0) {
+      die("failed to send left over bytes from CONNECT");
+    }
+  }
 
   int client_to_server[2] = {client_socket, server_socket};
   int server_to_client[2] = {server_socket, client_socket};
