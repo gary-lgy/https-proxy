@@ -205,7 +205,10 @@ void relay_sockets(int read_sock, int write_sock) {
   while (1) {
     ssize_t bytes_read = read(read_sock, buffer, sizeof(buffer));
     if (bytes_read <= 0) {
-      return;
+      if (shutdown(write_sock, SHUT_RDWR) < 0) {
+        perror("close after one end closes");
+      }
+      break;
     }
     DEBUG_LOG("received %zu bytes from fd %d", bytes_read, read_sock);
     ssize_t bytes_written = write(write_sock, buffer, bytes_read);
@@ -275,13 +278,13 @@ int main(int argc, char** argv) {
   pthread_join(worker2, NULL);
 
   if (close(client_socket) < 0) {
-    die("failed to close client socket");
+    die(format_error_messages(new_error_from_errno("failed to close client socket")));
   }
   if (close(server_socket) < 0) {
-    die("failed to close server socket");
+    die(format_error_messages(new_error_from_errno("failed to close server socket")));
   }
   if (close(listen_socket) < 0) {
-    die("failed to close listen socket");
+    die(format_error_messages(new_error_from_errno("failed to close listen socket")));
   }
 
   return 0;
