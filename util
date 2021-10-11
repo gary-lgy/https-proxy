@@ -8,6 +8,8 @@ if [ "$1" = "run" ]; then
   ./out/proxy "$PORT"
 elif [ "$1" = "thread_count" ]; then
   pgrep -u "$USER" proxy | xargs watch ps -o thcount
+elif [ "$1" = "mem" ]; then
+  pgrep -u "$USER" proxy | xargs -I% watch "ps -o vsz= % | xargs -I{} bash -c 'echo \$(({} /1024))'"
 else
   echo "usage: $0 run [port] | thread_count"
 fi
