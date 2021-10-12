@@ -35,5 +35,11 @@ char* hsprintf(const char* fmt, ...) {
 // Returns a heap-allocated string containing the errno explanation.
 char* errno2s(int errnum) {
   char* buf = malloc(ERRNO_BUF_SIZE * sizeof(char));
-  return strerror_r(errnum, buf, ERRNO_BUF_SIZE);
+  char* desc = strerror_r(errnum, buf, ERRNO_BUF_SIZE);
+  if (desc != buf) {
+    // strerror_r returned a pointer to static memory, copy it into the buffer
+    strncpy(buf, desc, ERRNO_BUF_SIZE);
+  }
+
+  return buf;
 }

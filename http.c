@@ -41,21 +41,15 @@ int parse_http_connect_message(char* message, struct connection_t* connection) {
 }
 
 int send_successful_connect_response(const struct connection_t* conn) {
-  char* response_line = hsprintf("%s 200 OK \r\n\r\n", conn->http_version);
-  if (write(conn->client_socket, response_line, strlen(response_line)) < 0) {
-    free(response_line);
-    return -1;
-  }
+  char* response_line = hsprintf("%s 200 Connection Established \r\n\r\n", conn->http_version);
+  ssize_t status = write(conn->client_socket, response_line, strlen(response_line));
   free(response_line);
-  return 0;
+  return status < 0 ? -1 : 0;
 }
 
 int send_unsuccessful_connect_response(const struct connection_t* conn) {
-  char* response_line = hsprintf("%s 400 Bad request \r\n\r\n", conn->http_version);
-  if (write(conn->client_socket, response_line, strlen(response_line)) < 0) {
-    free(response_line);
-    return -1;
-  }
+  char* response_line = hsprintf("%s 400 Bad Request \r\n\r\n", conn->http_version);
+  ssize_t status = write(conn->client_socket, response_line, strlen(response_line));
   free(response_line);
-  return 0;
+  return status < 0 ? -1 : 0;
 }

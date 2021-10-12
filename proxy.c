@@ -170,8 +170,7 @@ ssize_t handle_http_connect_request(struct connection_t* conn, char** read_buffe
       // received full CONNECT message
       if (parse_http_connect_message(read_buffer, conn) < 0) {
         // malformed CONNECT
-        DEBUG_LOG("couldn't read CONNECT message, aborting request with 400");
-        send_unsuccessful_connect_response(conn);
+        DEBUG_LOG("couldn't parse CONNECT message: %s", read_buffer);
         return -1;
       }
       char* next_char = double_crlf + 4;  // skip over the double crlf
@@ -228,6 +227,7 @@ void handle_new_connection(struct connection_t* conn) {
 
   int target_socket = tcp_connect_to_target(conn);
   if (target_socket < 0) {
+    send_unsuccessful_connect_response(conn);
     DEBUG_LOG("failed to connect to target %s", conn->target_hostport);
     return;
   }
@@ -262,7 +262,7 @@ void* handle_new_connection_thread_func_wrapper(void* args) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    die("provide target_port number as the first argument");
+    die("provide listen port number as the first argument");
   }
 
   unsigned short listen_port;
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
   }
 
   int listen_socket = tcp_listen(listen_port);
-  printf("Listening on target_port %hu\n", listen_port);
+  printf("Listening on port %hu\n", listen_port);
 
   while (1) {
     struct connection_t* conn = await_client_connection(listen_socket);
