@@ -33,9 +33,7 @@ int parse_http_connect_message(char* message, struct connection_t* connection) {
   strncpy(connection->target_port, port, MAX_PORT_LEN);
   strncpy(connection->http_version, http_version, HTTP_VERSION_LEN);
 
-  strcpy(connection->target_hostport, connection->target_host);
-  strcat(connection->target_hostport, ":");
-  strcat(connection->target_hostport, connection->target_port);
+  set_target_hostport(connection);
 
   return 0;
 }

@@ -15,7 +15,6 @@ struct connection_t {
   // socket addresses
   struct sockaddr_in* client_addr;
   struct sockaddr_in* target_addr;
-  socklen_t addrlen;
 
   // file descriptors
   int client_socket;
@@ -37,5 +36,7 @@ struct connection_t {
 
 struct connection_t* init_conn();
 void free_conn(struct connection_t*);
+void set_client_hostport(struct connection_t*);
+void set_target_hostport(struct connection_t*);
 
 #endif  // HTTPS_PROXY_CONNECTION_H

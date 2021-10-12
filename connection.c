@@ -1,5 +1,8 @@
 #include "connection.h"
+#include <arpa/inet.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 struct connection_t* init_conn() {
@@ -7,7 +10,6 @@ struct connection_t* init_conn() {
 
   conn->client_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->target_addr = calloc(1, sizeof(struct sockaddr_in));
-  conn->addrlen = sizeof(struct sockaddr_in);
   conn->client_socket = -1;
   conn->target_socket = -1;
   conn->target_host = calloc(MAX_HOST_LEN, sizeof(char));
@@ -43,4 +45,18 @@ void free_conn(struct connection_t* conn) {
   free(conn->target_to_client_buffer);
 
   free(conn);
+}
+
+void set_client_hostport(struct connection_t* conn) {
+  inet_ntop(AF_INET, &(conn->client_addr->sin_addr), conn->client_hostport, INET_ADDRSTRLEN);
+  strcat(conn->client_hostport, ":");
+  char client_port[MAX_PORT_LEN];
+  sprintf(client_port, "%hu", ntohs(conn->client_addr->sin_port));
+  strcat(conn->client_hostport, client_port);
+}
+
+void set_target_hostport(struct connection_t* conn) {
+  strcpy(conn->target_hostport, conn->target_host);
+  strcat(conn->target_hostport, ":");
+  strcat(conn->target_hostport, conn->target_port);
 }

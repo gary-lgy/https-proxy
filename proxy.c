@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <unistd.h>
 #include "connection.h"
 #include "http.h"
@@ -13,16 +14,17 @@
 #include "util.h"
 
 #define CONNECT_BACKLOG 512
+#define EPOLL_MAX_EVENTS 64
 
 inline __attribute__((always_inline)) void die(const char* message) {
   fprintf(stderr, "%s\n", message);
   exit(EXIT_FAILURE);
 }
 
-int tcp_listen(unsigned short port) {
-  int listen_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (listen_socket < 0) {
-    die(hsprintf("failed to create listen socket: %s", errno2s(errno)));
+int create_bind_listen(unsigned short port) {
+  int listening_socket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+  if (listening_socket < 0) {
+    die(hsprintf("failed to create listening socket: %s", errno2s(errno)));
   }
 
   struct sockaddr_in listen_addr;
@@ -30,39 +32,15 @@ int tcp_listen(unsigned short port) {
   listen_addr.sin_addr.s_addr = INADDR_ANY;
   listen_addr.sin_port = htons(port);
 
-  if (bind(listen_socket, (struct sockaddr*)&listen_addr, sizeof(listen_addr)) < 0) {
-    die(hsprintf("failed to bind listen socket to port: %s", errno2s(errno)));
-    return -1;
+  if (bind(listening_socket, (struct sockaddr*)&listen_addr, sizeof(listen_addr)) < 0) {
+    die(hsprintf("failed to bind listening socket to port: %s", errno2s(errno)));
   }
 
-  if (listen(listen_socket, CONNECT_BACKLOG) < 0) {
-    die(hsprintf("failed listen: %s", errno2s(errno)));
-    return -1;
+  if (listen(listening_socket, CONNECT_BACKLOG) < 0) {
+    die(hsprintf("failed to listen: %s", errno2s(errno)));
   }
 
-  return listen_socket;
-}
-
-struct connection_t* await_client_connection(int listen_socket) {
-  struct connection_t* conn = init_conn();
-
-  int client_socket = accept(listen_socket, (struct sockaddr*)conn->client_addr, &conn->addrlen);
-  if (client_socket < 0) {
-    char* errno_str = errno2s(errno);
-    DEBUG_LOG("failed to accept incoming connection: %s", errno_str);
-    free(errno_str);
-    return NULL;
-  }
-
-  conn->client_socket = client_socket;
-  inet_ntop(AF_INET, &(conn->client_addr->sin_addr), conn->client_hostport, INET_ADDRSTRLEN);
-  strcat(conn->client_hostport, ":");
-  char client_port[MAX_PORT_LEN];
-  sprintf(client_port, "%hu", conn->client_addr->sin_port);
-  strcat(conn->client_hostport, client_port);
-  DEBUG_LOG("Received connection from %s", conn->client_hostport);
-
-  return conn;
+  return listening_socket;
 }
 
 int tcp_connect(const struct sockaddr_in* remote_addr) {
@@ -106,7 +84,7 @@ int tcp_connect_to_target(struct connection_t* conn) {
   for (rp = host_addrs; rp != NULL; rp = rp->ai_next) {
     if ((sock = tcp_connect((struct sockaddr_in*)rp->ai_addr)) > 0) {
       // succeeded
-      memcpy(conn->target_addr, rp->ai_addr, conn->addrlen);
+      memcpy(conn->target_addr, rp->ai_addr, rp->ai_addrlen);
       break;
     }
   }
@@ -129,6 +107,7 @@ int tcp_connect_to_target(struct connection_t* conn) {
 ssize_t handle_http_connect_request(struct connection_t* conn, char** read_buffer_ptr) {
   // TODO: convert to async
   char* read_buffer = conn->client_to_target_buffer;
+  read_buffer[0] = '\0';
   ssize_t n_bytes_read = 0;
 
   while (1) {
@@ -141,7 +120,7 @@ ssize_t handle_http_connect_request(struct connection_t* conn, char** read_buffe
     ssize_t n_bytes_read_this_time = read(conn->client_socket, next_ptr, remaining_capacity);
     if (n_bytes_read_this_time == 0) {
       DEBUG_LOG(
-          "client %s closed the socket before sending full http CONNECT message, received %d bytes: %s",
+          "client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
           conn->client_hostport,
           n_bytes_read,
           read_buffer);
@@ -265,27 +244,73 @@ int main(int argc, char** argv) {
     die("provide listen port number as the first argument");
   }
 
-  unsigned short listen_port;
-  if (parse_port_number(argv[1], &listen_port) < 0) {
+  unsigned short listening_port;
+  if (parse_port_number(argv[1], &listening_port) < 0) {
     die(hsprintf("failed to parse port number '%s'", argv[1]));
   }
 
-  int listen_socket = tcp_listen(listen_port);
-  printf("Listening on port %hu\n", listen_port);
+  int listening_socket = create_bind_listen(listening_port);
+  printf("Listening on port %hu\n", listening_port);
+
+  int epoll_fd = epoll_create1(0);
+  if (epoll_fd < 0) {
+    die(hsprintf("failed to create epoll instance: %s", errno2s(errno)));
+  }
+
+  struct epoll_event event, events[EPOLL_MAX_EVENTS];
+
+  event.data.fd = listening_socket;
+  event.events = EPOLLIN | EPOLLET | EPOLLEXCLUSIVE;
+  // TODO: when multithreading, test whether thundering herd will occur
+  // TODO: to distribute the new connections to multiple threads, we may need to use LT instead of ET
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listening_socket, &event) < 0) {
+    die(hsprintf("failed to add listening socket into epoll: %s", errno2s(errno)));
+  }
 
   while (1) {
-    struct connection_t* conn = await_client_connection(listen_socket);
-    if (conn == NULL) {
-      die("failed to accept connection");
+    int num_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
+    DEBUG_LOG("epoll_wait returned %d", num_events);
+    if (num_events < 0) {
+      die(hsprintf("epoll_wait error: %s", errno2s(errno)));
       break;
     }
 
-    pthread_t worker;
-    pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, conn);
+    struct sockaddr_in client_addr;
+    socklen_t addrlen = sizeof(struct sockaddr_in);
+    while (1) {
+      // TODO: aceept as non-blocking sockets
+      int client_socket = accept(listening_socket, (struct sockaddr*)&client_addr, &addrlen);
+      if (client_socket < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          // processed all incoming connections
+          break;
+        } else if (errno == EINTR) {
+          // interrupted by signal, retry
+          continue;
+        } else {
+          // unexpected error in accepting the connection
+          die(hsprintf("accept4 failed: %s", errno2s(errno)));
+        }
+      }
+
+      struct connection_t* conn = init_conn();
+      memcpy(conn->client_addr, &client_addr, addrlen);
+      conn->client_socket = client_socket;
+      set_client_hostport(conn);
+
+      DEBUG_LOG("Received connection from %s", conn->client_hostport);
+
+      pthread_t worker;
+      pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, conn);
+    }
   }
 
-  if (close(listen_socket) < 0) {
-    die(hsprintf("failed to close listen_socket: %s", errno2s(errno)));
+  if (close(listening_socket) < 0) {
+    die(hsprintf("failed to close listening socket: %s", errno2s(errno)));
+  }
+
+  if (close(epoll_fd) < 0) {
+    die(hsprintf("failed to close epoll instance: %s", errno2s(errno)));
   }
 
   return 0;
