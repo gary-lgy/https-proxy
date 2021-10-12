@@ -8,9 +8,9 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include "connection.h"
 #include "http.h"
 #include "log.h"
+#include "tunnel_conn.h"
 #include "util.h"
 
 #define CONNECT_BACKLOG 512
@@ -73,7 +73,7 @@ int lookup_host_addr(const char* hostname, const char* port, struct addrinfo** r
   return 0;
 }
 
-int tcp_connect_to_target(struct connection_t* conn) {
+int tcp_connect_to_target(struct tunnel_conn* conn) {
   struct addrinfo *host_addrs, *rp;
 
   if (lookup_host_addr(conn->target_host, conn->target_port, &host_addrs) < 0) {
@@ -104,7 +104,7 @@ int tcp_connect_to_target(struct connection_t* conn) {
  * Returns the number of characters left in the buffer.
  */
 
-ssize_t handle_http_connect_request(struct connection_t* conn, char** read_buffer_ptr) {
+ssize_t handle_http_connect_request(struct tunnel_conn* conn, char** read_buffer_ptr) {
   // TODO: convert to async
   char* read_buffer = conn->client_to_target_buffer;
   read_buffer[0] = '\0';
@@ -162,7 +162,7 @@ ssize_t handle_http_connect_request(struct connection_t* conn, char** read_buffe
   return -1;
 }
 
-void relay_sockets(struct connection_t* conn, bool client_to_target) {
+void relay_sockets(struct tunnel_conn* conn, bool client_to_target) {
   int read_sock = client_to_target ? conn->client_socket : conn->target_socket;
   int write_sock = client_to_target ? conn->target_socket : conn->client_socket;
   const char* source_hostport = client_to_target ? conn->client_hostport : conn->target_hostport;
@@ -190,12 +190,12 @@ void relay_sockets(struct connection_t* conn, bool client_to_target) {
 }
 
 void* relay_sockets_target_to_client_thread_func_wrapper(void* args) {
-  struct connection_t* conn = args;
+  struct tunnel_conn* conn = args;
   relay_sockets(conn, false);
   pthread_exit(NULL);
 }
 
-void handle_new_connection(struct connection_t* conn) {
+void handle_new_connection(struct tunnel_conn* conn) {
   char* next_char;
   ssize_t bytes_remaining = handle_http_connect_request(conn, &next_char);
   if (bytes_remaining < 0) {
@@ -233,7 +233,7 @@ void handle_new_connection(struct connection_t* conn) {
 }
 
 void* handle_new_connection_thread_func_wrapper(void* args) {
-  struct connection_t* conn = args;
+  struct tunnel_conn* conn = args;
   handle_new_connection(conn);
   free_conn(conn);
   pthread_exit(NULL);
@@ -293,7 +293,7 @@ int main(int argc, char** argv) {
         }
       }
 
-      struct connection_t* conn = init_conn();
+      struct tunnel_conn* conn = init_conn();
       memcpy(conn->client_addr, &client_addr, addrlen);
       conn->client_socket = client_socket;
       set_client_hostport(conn);

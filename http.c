@@ -2,12 +2,12 @@
 #include <malloc.h>
 #include <string.h>
 #include <unistd.h>
-#include "connection.h"
+#include "tunnel_conn.h"
 #include "util.h"
 
 #define DEFAULT_TARGET_PORT "80"
 
-int parse_http_connect_message(char* message, struct connection_t* connection) {
+int parse_http_connect_message(char* message, struct tunnel_conn* connection) {
   // CONNECT google.com:443 HTTP/1.0
   char* saveptr;
   char* token = strtok_r(message, " ", &saveptr);
@@ -38,14 +38,14 @@ int parse_http_connect_message(char* message, struct connection_t* connection) {
   return 0;
 }
 
-int send_successful_connect_response(const struct connection_t* conn) {
+int send_successful_connect_response(const struct tunnel_conn* conn) {
   char* response_line = hsprintf("%s 200 Connection Established \r\n\r\n", conn->http_version);
   ssize_t status = write(conn->client_socket, response_line, strlen(response_line));
   free(response_line);
   return status < 0 ? -1 : 0;
 }
 
-int send_unsuccessful_connect_response(const struct connection_t* conn) {
+int send_unsuccessful_connect_response(const struct tunnel_conn* conn) {
   char* response_line = hsprintf("%s 400 Bad Request \r\n\r\n", conn->http_version);
   ssize_t status = write(conn->client_socket, response_line, strlen(response_line));
   free(response_line);

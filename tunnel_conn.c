@@ -1,12 +1,12 @@
-#include "connection.h"
+#include "tunnel_conn.h"
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-struct connection_t* init_conn() {
-  struct connection_t* conn = calloc(1, sizeof(struct connection_t));
+struct tunnel_conn* init_conn() {
+  struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->target_addr = calloc(1, sizeof(struct sockaddr_in));
@@ -23,7 +23,7 @@ struct connection_t* init_conn() {
   return conn;
 }
 
-void free_conn(struct connection_t* conn) {
+void free_conn(struct tunnel_conn* conn) {
   if (conn->client_socket > 0) {
     shutdown(conn->client_socket, SHUT_RDWR);
     close(conn->client_socket);
@@ -47,7 +47,7 @@ void free_conn(struct connection_t* conn) {
   free(conn);
 }
 
-void set_client_hostport(struct connection_t* conn) {
+void set_client_hostport(struct tunnel_conn* conn) {
   inet_ntop(AF_INET, &(conn->client_addr->sin_addr), conn->client_hostport, INET_ADDRSTRLEN);
   strcat(conn->client_hostport, ":");
   char client_port[MAX_PORT_LEN];
@@ -55,7 +55,7 @@ void set_client_hostport(struct connection_t* conn) {
   strcat(conn->client_hostport, client_port);
 }
 
-void set_target_hostport(struct connection_t* conn) {
+void set_target_hostport(struct tunnel_conn* conn) {
   strcpy(conn->target_hostport, conn->target_host);
   strcat(conn->target_hostport, ":");
   strcat(conn->target_hostport, conn->target_port);

@@ -1,5 +1,5 @@
-#ifndef HTTPS_PROXY_CONNECTION_H
-#define HTTPS_PROXY_CONNECTION_H
+#ifndef HTTPS_PROXY_TUNNEL_CONN_H
+#define HTTPS_PROXY_TUNNEL_CONN_H
 
 #include <netinet/in.h>
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 #define HTTP_VERSION_LEN 9  // HTTP/1.1
 #define HOST_PORT_BUF_SIZE 1024
 
-struct connection_t {
+struct tunnel_conn {
   // socket addresses
   struct sockaddr_in* client_addr;
   struct sockaddr_in* target_addr;
@@ -34,9 +34,9 @@ struct connection_t {
   char* target_to_client_buffer;
 };
 
-struct connection_t* init_conn();
-void free_conn(struct connection_t*);
-void set_client_hostport(struct connection_t*);
-void set_target_hostport(struct connection_t*);
+struct tunnel_conn* init_conn();
+void free_conn(struct tunnel_conn*);
+void set_client_hostport(struct tunnel_conn*);
+void set_target_hostport(struct tunnel_conn*);
 
-#endif  // HTTPS_PROXY_CONNECTION_H
+#endif  // HTTPS_PROXY_TUNNEL_CONN_H
