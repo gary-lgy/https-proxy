@@ -37,7 +37,9 @@ struct tunnel_buffer {
 struct tunnel_conn {
   // file descriptors
   int client_socket;
+  int client_socket_dup;
   int target_socket;
+  int target_socket_dup;
 
   // textual representations of ip/hostname:port for printing
   char* client_hostport;
@@ -51,6 +53,9 @@ struct tunnel_conn {
   // buffers for tunneling
   struct tunnel_buffer client_to_target_buffer;
   struct tunnel_buffer target_to_client_buffer;
+
+  // how many directions of this connection have been closed (0, 1, or 2)
+  int halves_closed;
 };
 
 struct tunnel_conn* init_conn();

@@ -1,8 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <netdb.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,30 +67,30 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
       continue;
     }
 
-    while (1) {
-      if (connect(sock, cb->next_addr->ai_addr, sizeof(struct sockaddr_in)) == 0 || errno == EAGAIN ||
-          errno == EINPROGRESS) {
-        // we're connected or connecting to the current address
-        cb->next_addr = cb->next_addr->ai_next;
-        cb->sock = sock;
+    if (connect(sock, cb->next_addr->ai_addr, sizeof(struct sockaddr_in)) == 0 || errno == EAGAIN ||
+        errno == EINPROGRESS) {
+      // we're connected or connecting to the current address
+      cb->next_addr = cb->next_addr->ai_next;
+      cb->sock = sock;
 
-        struct epoll_event event;
-        event.events = EPOLLOUT | EPOLLONESHOT;
-        event.data.ptr = cb;
-        // TODO: check return values of epoll_ctl
-        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->sock, &event);
-        return;
+      struct epoll_event event;
+      event.events = EPOLLOUT | EPOLLONESHOT;
+      event.data.ptr = cb;
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->sock, &event) < 0) {
+        char* error_desc = errno2s(errno);
+        DEBUG_LOG("failed to add target socket into epoll: %s", error_desc);
+        free(error_desc);
+
+        freeaddrinfo(cb->host_addrs);
+        free_conn(cb->conn);
+        close(sock);
+        free(cb);
       }
-
-      if (errno == EINTR) {
-        // interrupted, try again
-        continue;
-      }
-
-      // some unexpected error
-      close(sock);
-      break;
+      return;
     }
+
+    // some unexpected error, try the next address
+    close(sock);
   }
 
   // none of the addresses work
@@ -123,25 +121,20 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
 ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
   buf->empty[0] = '\0';
 
-  while (1) {
-    size_t remaining_capacity = BUFFER_SIZE - 1 - (buf->empty - buf->start);
-    if (remaining_capacity <= 0) {
-      return -2;
-    }
+  size_t remaining_capacity = BUFFER_SIZE - 1 - (buf->empty - buf->start);
+  if (remaining_capacity <= 0) {
+    return -2;
+  }
 
-    ssize_t n_bytes_read = read(read_fd, buf->empty, remaining_capacity);
-    if (n_bytes_read == -1 && errno == EINTR) {
-      // interrupted by signal, try again
-      continue;
-    }
-    if (n_bytes_read <= 0) {
-      return n_bytes_read;
-    }
+  ssize_t n_bytes_read = read(read_fd, buf->empty, remaining_capacity);
 
-    buf->empty += n_bytes_read;
-    buf->empty[0] = '\0';
+  if (n_bytes_read <= 0) {
     return n_bytes_read;
   }
+
+  buf->empty += n_bytes_read;
+  buf->empty[0] = '\0';
+  return n_bytes_read;
 }
 
 /**
@@ -207,85 +200,16 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
   return 1;
 }
 
-void relay_sockets(struct tunnel_conn* conn, bool client_to_target) {
-  // TODO: shift buffer pointers in case of partial writes
-  int read_sock = client_to_target ? conn->client_socket : conn->target_socket;
-  int write_sock = client_to_target ? conn->target_socket : conn->client_socket;
-  const char* source_hostport = client_to_target ? conn->client_hostport : conn->target_hostport;
-  const char* dest_hostport = client_to_target ? conn->target_hostport : conn->client_hostport;
-  struct tunnel_buffer* buffer = client_to_target ? &conn->client_to_target_buffer : &conn->target_to_client_buffer;
-
-  DEBUG_LOG("relaying data (%s) -> (%s)", source_hostport, dest_hostport);
-
-  while (1) {
-    ssize_t bytes_read = read(read_sock, buffer->start, BUFFER_SIZE);
-    if (bytes_read <= 0) {
-      if (shutdown(write_sock, SHUT_RDWR) < 0) {
-        perror("close after one end closes");
-      }
-      break;
-    }
-    DEBUG_LOG("received %zu bytes (%s) -> (%s)", bytes_read, source_hostport, dest_hostport);
-    ssize_t bytes_written = write(write_sock, buffer->start, bytes_read);
-    if (bytes_written < 0) {
-      break;
-    }
-    DEBUG_LOG("wrote %zu bytes (%s) -> (%s)", bytes_written, source_hostport, dest_hostport);
-  }
-  DEBUG_LOG("stopping relay (%s) -> (%s)", source_hostport, dest_hostport);
-}
-
-void* relay_sockets_target_to_client_thread_func_wrapper(void* args) {
-  struct tunnel_conn* conn = args;
-  relay_sockets(conn, false);
-  pthread_exit(NULL);
-}
-
-void handle_new_connection(struct tunnel_conn* conn) {
-  send_successful_connect_response(conn);
-
-  // send the left-over bytes we read from the client to the server
-  size_t n_bytes_remaining = conn->client_to_target_buffer.empty - conn->client_to_target_buffer.consumable;
-  if (n_bytes_remaining > 0) {
-    DEBUG_LOG("sending %d left over bytes after CONNECT", n_bytes_remaining);
-    if (write(conn->target_socket, conn->client_to_target_buffer.consumable, n_bytes_remaining) < 0) {
-      DEBUG_LOG("failed to send left over bytes from CONNECT");
-      return;
-    }
-    // reset the buffer
-    conn->client_to_target_buffer.consumable = conn->client_to_target_buffer.start;
-    conn->client_to_target_buffer.empty = conn->client_to_target_buffer.start;
-  }
-
-  pthread_t worker;
-  pthread_create(&worker, NULL, relay_sockets_target_to_client_thread_func_wrapper, conn);
-  relay_sockets(conn, true);
-  pthread_join(worker, NULL);
-
-  DEBUG_LOG("tunnel (%s) -> (%s) closed", conn->client_hostport, conn->target_hostport);
-}
-
-void* handle_new_connection_thread_func_wrapper(void* args) {
-  struct tunnel_conn* conn = args;
-  handle_new_connection(conn);
-  free_conn(conn);
-  pthread_exit(NULL);
-}
-
 void accept_incoming_connections(int epoll_fd, int listening_socket) {
   while (1) {
     struct sockaddr_in client_addr;
     socklen_t addrlen = sizeof(struct sockaddr_in);
 
-    // TODO: accept as non-blocking sockets?
-    int client_socket = accept(listening_socket, (struct sockaddr*)&client_addr, &addrlen);
+    int client_socket = accept4(listening_socket, (struct sockaddr*)&client_addr, &addrlen, SOCK_NONBLOCK);
     if (client_socket < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         // processed all incoming connections
         return;
-      } else if (errno == EINTR) {
-        // interrupted by signal, retry
-        continue;
       } else {
         // unexpected error in accepting the connection
         char* error_desc = errno2s(errno);
@@ -309,8 +233,13 @@ void accept_incoming_connections(int epoll_fd, int listening_socket) {
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLONESHOT;
     event.data.ptr = cb;
-    // TODO: check return value
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event);
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) < 0) {
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG("failed to add accepted client socket from %s into epoll: %s", conn->client_hostport, error_desc);
+      free(error_desc);
+      free_conn(conn);
+      free(cb);
+    }
   }
 }
 
@@ -337,7 +266,137 @@ void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t eve
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLONESHOT;
     event.data.ptr = cb;
-    epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event);
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event) < 0) {
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG("failed to re-add client socket from %s for reading CONNECT: %s", conn->client_hostport, error_desc);
+      free(error_desc);
+
+      free_conn(conn);
+      free(cb);
+    }
+  }
+}
+
+void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
+  // dup each socket to decouple read and write ends of the socket
+  // this allows us to set different event masks on the same socket
+  int client_read_fd = conn->client_socket;
+  int client_write_fd = conn->client_socket_dup = dup(conn->client_socket);
+  int target_read_fd = conn->target_socket;
+  int target_write_fd = conn->target_socket_dup = dup(conn->target_socket);
+
+  // During tunneling, we will switch to epoll_wait on all these FDs.
+  // If the FD has already been added, EPOLL_CTL_ADD will not work; only EPOLL_CTL_MOD can reactivate the FD.
+  // On the other hand, EPOLL_CTL_MOD will only work for FDs that have not been added.
+  // However, we have no idea which FDs are in the epoll instance already.
+  // For convenience, we make sure all FDs have been added to the epoll instance.
+  // Hence, we can use EPOLL_CTL_MOD later when we want to wait on the socket again.
+  struct epoll_event event;
+  event.events = EPOLLERR | EPOLLONESHOT;
+  event.data.ptr = NULL;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, target_write_fd, &event)) {
+    char* error_desc = errno2s(errno);
+    DEBUG_LOG(
+        "failed to add target_write_fd %d for (%s) -> (%s) into epoll: %s",
+        target_write_fd,
+        conn->client_hostport,
+        conn->target_hostport,
+        error_desc);
+    free(error_desc);
+    free_conn(conn);
+    return;
+  }
+
+  // TODO: free memory / close dup when cleaning up after error
+  // Send HTTP 200 to client
+  int n_bytes =
+      sprintf(conn->target_to_client_buffer.start, "%s 200 Connection Established \r\n\r\n", conn->http_version);
+  conn->target_to_client_buffer.empty += n_bytes;
+
+  struct epoll_tunneling_cb* cb = malloc(sizeof(struct epoll_tunneling_cb));
+  cb->type = cb_type_tunneling;
+  cb->conn = conn;
+  cb->buf = &conn->target_to_client_buffer;
+  cb->source_hostport = cb->conn->target_hostport;
+  cb->dest_hostport = cb->conn->client_hostport;
+  cb->polled_fd = client_write_fd;
+  cb->opposite_fd = target_read_fd;
+
+  event.events = EPOLLOUT | EPOLLONESHOT;
+  event.data.ptr = cb;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->polled_fd, &event) < 0) {
+    char* error_desc = errno2s(errno);
+    DEBUG_LOG(
+        "failed to add client socket for (%s) -> (%s) to epoll for writing 200 OK message: %s",
+        conn->client_hostport,
+        conn->target_hostport,
+        error_desc);
+    free(error_desc);
+
+    free(cb);
+    free_conn(conn);
+    return;
+  }
+
+  size_t n_bytes_remaining = conn->client_to_target_buffer.empty - conn->client_to_target_buffer.consumable;
+  if (n_bytes_remaining > 0) {
+    // if we received more than just the CONNECT message from the client, send the rest of the bytes to the target
+    DEBUG_LOG("sending %d left over bytes after CONNECT", n_bytes_remaining);
+    cb = malloc(sizeof(struct epoll_tunneling_cb));
+    cb->type = cb_type_tunneling;
+    cb->conn = conn;
+    cb->source_hostport = cb->conn->client_hostport;
+    cb->dest_hostport = cb->conn->target_hostport;
+    cb->buf = &conn->client_to_target_buffer;
+    cb->polled_fd = target_write_fd;
+    cb->opposite_fd = client_read_fd;
+
+    event.events = EPOLLOUT | EPOLLONESHOT;
+    event.data.ptr = cb;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->polled_fd, &event) < 0) {
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG(
+          "failed to add target socket for (%s) -> (%s) to epoll for bytes after CONNECT: %s",
+          conn->client_hostport,
+          conn->target_hostport,
+          error_desc);
+      free(error_desc);
+
+      free(cb);
+      free_conn(conn);
+      return;
+    }
+  } else {
+    // wait to read from client
+
+    // reset the buffer
+    conn->client_to_target_buffer.consumable = conn->client_to_target_buffer.start;
+    conn->client_to_target_buffer.empty = conn->client_to_target_buffer.start;
+
+    cb = malloc(sizeof(struct epoll_tunneling_cb));
+    cb->type = cb_type_tunneling;
+    cb->conn = conn;
+    cb->source_hostport = cb->conn->client_hostport;
+    cb->dest_hostport = cb->conn->target_hostport;
+    cb->buf = &conn->client_to_target_buffer;
+    cb->polled_fd = client_read_fd;
+    cb->opposite_fd = target_write_fd;
+
+    event.events = EPOLLIN | EPOLLONESHOT;
+    event.data.ptr = cb;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->polled_fd, &event) < 0) {
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG(
+          "failed to add client socket for (%s) -> (%s) to epoll for reading: %s",
+          conn->client_hostport,
+          conn->target_hostport,
+          error_desc);
+      free(error_desc);
+
+      free(cb);
+      free_conn(conn);
+      return;
+    }
   }
 }
 
@@ -362,15 +421,145 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
     cb->conn->target_socket = cb->sock;
     DEBUG_LOG("connected to %s", cb->conn->target_hostport);
 
-    // TODO: examine whether we should use non blocking sockets
-    const int flags = fcntl(cb->sock, F_GETFL, 0) & (~O_NONBLOCK);
-    fcntl(cb->sock, F_SETFL, flags);
-
-    pthread_t worker;
-    pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, cb->conn);
+    enter_tunneling_state(epoll_fd, cb->conn);
 
     freeaddrinfo(cb->host_addrs);
     free(cb);
+  }
+}
+
+void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t events) {
+  if (events & EPOLLERR) {
+    DEBUG_LOG(
+        "epoll reported error on tunnel connection (%s) -> (%s) in tunneling state",
+        cb->source_hostport,
+        cb->dest_hostport);
+  }
+
+  struct epoll_event event;
+
+  if (events & EPOLLIN) {
+    size_t remaining_capacity = BUFFER_SIZE - (cb->buf->empty - cb->buf->start);
+    if (remaining_capacity <= 0) {
+      die(hsprintf(
+          "going to read for tunnel (%s) -> (%s), but the buf is full; this should not happen",
+          cb->source_hostport,
+          cb->dest_hostport));
+    }
+
+    ssize_t n_bytes_read = read(cb->polled_fd, cb->buf->empty, remaining_capacity);
+
+    if (n_bytes_read == 0) {
+      // peer stopped sending
+      DEBUG_LOG("peer (%s) -> (%s) closed connection", cb->source_hostport, cb->dest_hostport);
+      shutdown(cb->polled_fd, SHUT_RD);
+      shutdown(cb->opposite_fd, SHUT_WR);
+      if (++cb->conn->halves_closed == 2) {
+        DEBUG_LOG("tunnel (%s) -> (%s) closed", cb->conn->client_hostport, cb->conn->target_hostport);
+        // both halves closed, tear down the whole connection
+        free_conn(cb->conn);
+        free(cb);
+      }
+      return;
+    } else if (n_bytes_read < 0) {
+      // read error
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG("read error from (%s) -> (%s): %s", cb->source_hostport, cb->dest_hostport, error_desc);
+      free(error_desc);
+      free_conn(cb->conn);
+      free(cb);
+      return;
+    }
+
+    DEBUG_LOG("received %zu bytes (%s) -> (%s)", n_bytes_read, cb->source_hostport, cb->dest_hostport);
+
+    cb->buf->empty += n_bytes_read;
+
+    int temp = cb->polled_fd;
+    cb->polled_fd = cb->opposite_fd;
+    cb->opposite_fd = temp;
+
+    event.events = EPOLLOUT | EPOLLONESHOT;
+    event.data.ptr = cb;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->polled_fd, &event) < 0) {
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG(
+          "failed to add writing socket for (%s) -> (%s) for tunneling: %s",
+          cb->source_hostport,
+          cb->dest_hostport,
+          error_desc);
+      free(error_desc);
+
+      free_conn(cb->conn);
+      free(cb);
+    }
+  } else if (events & EPOLLOUT) {
+    size_t n_bytes_to_send = cb->buf->empty - cb->buf->consumable;
+
+    if (n_bytes_to_send <= 0) {
+      die(hsprintf(
+          "going to write for tunnel (%s) -> (%s), but the buf is empty; this should not happen",
+          cb->source_hostport,
+          cb->dest_hostport));
+    }
+
+    ssize_t n_bytes_sent = send(cb->polled_fd, cb->buf->consumable, n_bytes_to_send, MSG_NOSIGNAL);
+
+    if (n_bytes_sent < 0) {
+      // peer refused to receive?
+      // teardown the entire connection
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG("write error from (%s) -> (%s): %s", cb->source_hostport, cb->dest_hostport, error_desc);
+      free(error_desc);
+
+      free_conn(cb->conn);
+      free(cb);
+      return;
+    }
+
+    DEBUG_LOG("wrote %zu bytes (%s) -> (%s)", n_bytes_sent, cb->source_hostport, cb->dest_hostport);
+
+    cb->buf->consumable += n_bytes_sent;
+
+    if (cb->buf->consumable >= cb->buf->empty) {
+      // sent everything, we can read again
+      cb->buf->consumable = cb->buf->empty = cb->buf->start;
+
+      int temp = cb->polled_fd;
+      cb->polled_fd = cb->opposite_fd;
+      cb->opposite_fd = temp;
+
+      event.events = EPOLLIN | EPOLLONESHOT;
+      event.data.ptr = cb;
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->polled_fd, &event) < 0) {
+        char* error_desc = errno2s(errno);
+        DEBUG_LOG(
+            "failed to add reading socket for (%s) -> (%s) for tunneling: %s",
+            cb->source_hostport,
+            cb->dest_hostport,
+            error_desc);
+        free(error_desc);
+
+        free_conn(cb->conn);
+        free(cb);
+      }
+    } else {
+      // wait for writability to send again later
+      event.events = EPOLLOUT | EPOLLONESHOT;
+      event.data.ptr = cb;
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->polled_fd, &event) < 0) {
+        char* error_desc = errno2s(errno);
+        DEBUG_LOG(
+            "failed to add writing socket for (%s) -> (%s) for tunneling: %s",
+            cb->source_hostport,
+            cb->dest_hostport,
+            error_desc);
+        free(error_desc);
+
+        free_conn(cb->conn);
+        free(cb);
+      }
+    }
   }
 }
 
@@ -418,6 +607,10 @@ int main(int argc, char** argv) {
         if (events[i].events & EPOLLERR) {
           DEBUG_LOG("epoll reported error on listening socket");
         }
+        if (!(events[i].events & EPOLLIN)) {
+          DEBUG_LOG("listening socket is not readable but epoll woke us up anyway");
+          continue;
+        }
         accept_incoming_connections(epoll_fd, listening_socket);
       } else {
         // events on existing connection
@@ -426,6 +619,8 @@ int main(int argc, char** argv) {
           handle_accepted_cb(epoll_fd, (struct epoll_accepted_cb*)cb, events[i].events);
         } else if (cb->type == cb_type_connecting) {
           handle_connecting_cb(epoll_fd, (struct epoll_connecting_cb*)cb, events[i].events);
+        } else if (cb->type == cb_type_tunneling) {
+          handle_tunneling_cb(epoll_fd, (struct epoll_tunneling_cb*)cb, events[i].events);
         }
       }
     }

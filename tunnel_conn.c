@@ -9,7 +9,10 @@ struct tunnel_conn* init_conn() {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_socket = -1;
+  conn->client_socket_dup = -1;
   conn->target_socket = -1;
+  conn->target_socket_dup = -1;
+
   conn->target_host = calloc(MAX_HOST_LEN, sizeof(char));
   conn->target_port = calloc(MAX_PORT_LEN, sizeof(char));
   conn->http_version = calloc(HTTP_VERSION_LEN, sizeof(char));
@@ -26,16 +29,26 @@ struct tunnel_conn* init_conn() {
   conn->target_to_client_buffer.consumable = buffer;
   conn->target_to_client_buffer.empty = buffer;
 
+  conn->halves_closed = 0;
+
   return conn;
 }
 
 void free_conn(struct tunnel_conn* conn) {
-  if (conn->client_socket > 0) {
+  if (conn->client_socket_dup >= 0) {
+    close(conn->client_socket_dup);
+  }
+
+  if (conn->client_socket >= 0) {
     shutdown(conn->client_socket, SHUT_RDWR);
     close(conn->client_socket);
   }
 
-  if (conn->target_socket > 0) {
+  if (conn->target_socket_dup >= 0) {
+    close(conn->target_socket_dup);
+  }
+
+  if (conn->target_socket >= 0) {
     shutdown(conn->target_socket, SHUT_RDWR);
     close(conn->target_socket);
   }
