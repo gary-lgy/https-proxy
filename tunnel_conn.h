@@ -58,8 +58,8 @@ struct tunnel_conn {
   int halves_closed;
 };
 
-struct tunnel_conn* init_conn();
-void free_conn(struct tunnel_conn*);
+struct tunnel_conn* create_tunnel_conn();
+void destroy_tunnel_conn(struct tunnel_conn* conn);
 void set_client_hostport(struct tunnel_conn*, const struct sockaddr_in*);
 void set_target_hostport(struct tunnel_conn*);
 

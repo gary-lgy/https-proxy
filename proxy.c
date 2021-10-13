@@ -82,7 +82,7 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
         free(error_desc);
 
         freeaddrinfo(cb->host_addrs);
-        free_conn(cb->conn);
+        destroy_tunnel_conn(cb->conn);
         close(sock);
         free(cb);
       }
@@ -97,7 +97,7 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
   DEBUG_LOG("failed to connect to target %s", cb->conn->target_hostport);
   send_unsuccessful_connect_response(cb->conn);
   freeaddrinfo(cb->host_addrs);
-  free_conn(cb->conn);
+  destroy_tunnel_conn(cb->conn);
   free(cb);
 }
 
@@ -110,7 +110,7 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
   if (lookup_host_addr(conn->target_host, conn->target_port, &cb->host_addrs) < 0) {
     send_unsuccessful_connect_response(conn);
     free(cb);
-    free_conn(conn);
+    destroy_tunnel_conn(conn);
     return;
   }
   cb->next_addr = cb->host_addrs;
@@ -219,7 +219,7 @@ void accept_incoming_connections(int epoll_fd, int listening_socket) {
       }
     }
 
-    struct tunnel_conn* conn = init_conn();
+    struct tunnel_conn* conn = create_tunnel_conn();
     conn->client_socket = client_socket;
     set_client_hostport(conn, &client_addr);
 
@@ -237,7 +237,7 @@ void accept_incoming_connections(int epoll_fd, int listening_socket) {
       char* error_desc = errno2s(errno);
       DEBUG_LOG("failed to add accepted client socket from %s into epoll: %s", conn->client_hostport, error_desc);
       free(error_desc);
-      free_conn(conn);
+      destroy_tunnel_conn(conn);
       free(cb);
     }
   }
@@ -255,7 +255,7 @@ void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t eve
 
   int result = find_and_parse_http_connect(conn);
   if (result < 0) {
-    free_conn(conn);
+    destroy_tunnel_conn(conn);
     free(cb);
   } else if (result == 0) {
     // try connecting to target
@@ -271,7 +271,7 @@ void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t eve
       DEBUG_LOG("failed to re-add client socket from %s for reading CONNECT: %s", conn->client_hostport, error_desc);
       free(error_desc);
 
-      free_conn(conn);
+      destroy_tunnel_conn(conn);
       free(cb);
     }
   }
@@ -303,7 +303,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
         conn->target_hostport,
         error_desc);
     free(error_desc);
-    free_conn(conn);
+    destroy_tunnel_conn(conn);
     return;
   }
 
@@ -334,7 +334,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     free(error_desc);
 
     free(cb);
-    free_conn(conn);
+    destroy_tunnel_conn(conn);
     return;
   }
 
@@ -363,7 +363,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
       free(error_desc);
 
       free(cb);
-      free_conn(conn);
+      destroy_tunnel_conn(conn);
       return;
     }
   } else {
@@ -394,7 +394,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
       free(error_desc);
 
       free(cb);
-      free_conn(conn);
+      destroy_tunnel_conn(conn);
       return;
     }
   }
@@ -457,7 +457,7 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
       if (++cb->conn->halves_closed == 2) {
         DEBUG_LOG("tunnel (%s) -> (%s) closed", cb->conn->client_hostport, cb->conn->target_hostport);
         // both halves closed, tear down the whole connection
-        free_conn(cb->conn);
+        destroy_tunnel_conn(cb->conn);
         free(cb);
       }
       return;
@@ -466,7 +466,7 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
       char* error_desc = errno2s(errno);
       DEBUG_LOG("read error from (%s) -> (%s): %s", cb->source_hostport, cb->dest_hostport, error_desc);
       free(error_desc);
-      free_conn(cb->conn);
+      destroy_tunnel_conn(cb->conn);
       free(cb);
       return;
     }
@@ -490,7 +490,7 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
           error_desc);
       free(error_desc);
 
-      free_conn(cb->conn);
+      destroy_tunnel_conn(cb->conn);
       free(cb);
     }
   } else if (events & EPOLLOUT) {
@@ -512,7 +512,7 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
       DEBUG_LOG("write error from (%s) -> (%s): %s", cb->source_hostport, cb->dest_hostport, error_desc);
       free(error_desc);
 
-      free_conn(cb->conn);
+      destroy_tunnel_conn(cb->conn);
       free(cb);
       return;
     }
@@ -540,7 +540,7 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
             error_desc);
         free(error_desc);
 
-        free_conn(cb->conn);
+        destroy_tunnel_conn(cb->conn);
         free(cb);
       }
     } else {
@@ -556,7 +556,7 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
             error_desc);
         free(error_desc);
 
-        free_conn(cb->conn);
+        destroy_tunnel_conn(cb->conn);
         free(cb);
       }
     }

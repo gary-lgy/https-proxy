@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
-struct tunnel_conn* init_conn() {
+struct tunnel_conn* create_tunnel_conn() {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_socket = -1;
@@ -34,7 +34,7 @@ struct tunnel_conn* init_conn() {
   return conn;
 }
 
-void free_conn(struct tunnel_conn* conn) {
+void destroy_tunnel_conn(struct tunnel_conn* conn) {
   if (conn->client_socket_dup >= 0) {
     close(conn->client_socket_dup);
   }
