@@ -35,15 +35,11 @@ struct tunnel_buffer {
 };
 
 struct tunnel_conn {
-  // socket addresses
-  struct sockaddr_in* client_addr;
-  struct sockaddr_in* target_addr;
-
   // file descriptors
   int client_socket;
   int target_socket;
 
-  // textual representations of the ip/hostname:port for printing
+  // textual representations of ip/hostname:port for printing
   char* client_hostport;
   char* target_hostport;
 
@@ -59,7 +55,7 @@ struct tunnel_conn {
 
 struct tunnel_conn* init_conn();
 void free_conn(struct tunnel_conn*);
-void set_client_hostport(struct tunnel_conn*);
+void set_client_hostport(struct tunnel_conn*, const struct sockaddr_in*);
 void set_target_hostport(struct tunnel_conn*);
 
 #endif  // HTTPS_PROXY_TUNNEL_CONN_H

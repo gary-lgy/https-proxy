@@ -8,8 +8,6 @@
 struct tunnel_conn* init_conn() {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
-  conn->client_addr = calloc(1, sizeof(struct sockaddr_in));
-  conn->target_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->client_socket = -1;
   conn->target_socket = -1;
   conn->target_host = calloc(MAX_HOST_LEN, sizeof(char));
@@ -42,8 +40,6 @@ void free_conn(struct tunnel_conn* conn) {
     close(conn->target_socket);
   }
 
-  free(conn->client_addr);
-  free(conn->target_addr);
   free(conn->client_hostport);
   free(conn->target_hostport);
   free(conn->target_host);
@@ -55,11 +51,11 @@ void free_conn(struct tunnel_conn* conn) {
   free(conn);
 }
 
-void set_client_hostport(struct tunnel_conn* conn) {
-  inet_ntop(AF_INET, &(conn->client_addr->sin_addr), conn->client_hostport, INET_ADDRSTRLEN);
+void set_client_hostport(struct tunnel_conn* conn, const struct sockaddr_in* client_addr) {
+  inet_ntop(AF_INET, &client_addr->sin_addr, conn->client_hostport, INET_ADDRSTRLEN);
   strcat(conn->client_hostport, ":");
   char client_port[MAX_PORT_LEN];
-  sprintf(client_port, "%hu", ntohs(conn->client_addr->sin_port));
+  sprintf(client_port, "%hu", ntohs(client_addr->sin_port));
   strcat(conn->client_hostport, client_port);
 }
 

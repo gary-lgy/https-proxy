@@ -296,9 +296,8 @@ void accept_incoming_connections(int epoll_fd, int listening_socket) {
     }
 
     struct tunnel_conn* conn = init_conn();
-    memcpy(conn->client_addr, &client_addr, addrlen);
     conn->client_socket = client_socket;
-    set_client_hostport(conn);
+    set_client_hostport(conn, &client_addr);
 
     DEBUG_LOG("Received connection from %s", conn->client_hostport);
 
@@ -361,7 +360,6 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
   } else {
     // connection succeeded
     cb->conn->target_socket = cb->sock;
-    memcpy(cb->conn->target_addr, &addr, sizeof(struct sockaddr_in));
     DEBUG_LOG("connected to %s", cb->conn->target_hostport);
 
     // TODO: examine whether we should use non blocking sockets
