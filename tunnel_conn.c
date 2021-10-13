@@ -8,6 +8,7 @@
 struct tunnel_conn* init_conn() {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
+  conn->state = state_accepted;
   conn->client_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->target_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->client_socket = -1;
@@ -17,8 +18,16 @@ struct tunnel_conn* init_conn() {
   conn->http_version = calloc(HTTP_VERSION_LEN, sizeof(char));
   conn->client_hostport = calloc(HOST_PORT_BUF_SIZE, sizeof(char));
   conn->target_hostport = calloc(HOST_PORT_BUF_SIZE, sizeof(char));
-  conn->client_to_target_buffer = malloc(BUFFER_SIZE * sizeof(char));
-  conn->target_to_client_buffer = malloc(BUFFER_SIZE * sizeof(char));
+
+  char* buffer = malloc(BUFFER_SIZE * sizeof(char));
+  conn->client_to_target_buffer.start = buffer;
+  conn->client_to_target_buffer.consumable = buffer;
+  conn->client_to_target_buffer.empty = buffer;
+
+  buffer = malloc(BUFFER_SIZE * sizeof(char));
+  conn->target_to_client_buffer.start = buffer;
+  conn->target_to_client_buffer.consumable = buffer;
+  conn->target_to_client_buffer.empty = buffer;
 
   return conn;
 }
@@ -41,8 +50,8 @@ void free_conn(struct tunnel_conn* conn) {
   free(conn->target_host);
   free(conn->target_port);
   free(conn->http_version);
-  free(conn->client_to_target_buffer);
-  free(conn->target_to_client_buffer);
+  free(conn->client_to_target_buffer.start);
+  free(conn->target_to_client_buffer.start);
 
   free(conn);
 }

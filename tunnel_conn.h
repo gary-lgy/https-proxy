@@ -11,7 +11,39 @@
 #define HTTP_VERSION_LEN 9  // HTTP/1.1
 #define HOST_PORT_BUF_SIZE 1024
 
+enum tunnel_conn_state {
+  state_accepted,
+  state_connecting,
+  state_connected,
+  state_tunneling,
+};
+
+/**
+ * The buffer layout looks like this:
+ * The first section is data that has already been consumed.
+ * The second section is data that is yet to be consumed.
+ * The third section is available space.
+ * |-------------------| <--- start
+ * | already consumed  |
+ * |-------------------| <--- consumable
+ * |  can be consumed  |
+ * |-------------------| <--- empty
+ * |      empty        |
+ * |-------------------|
+ *
+ * When writing into the buffer, producers should write from the start of the empty section.
+ * When consuming from the buffer, consumers should consume from the second section.
+ * The boundaries should be adjusted accordingly after consumption / production.
+ */
+struct tunnel_buffer {
+  char* start;
+  char* consumable;
+  char* empty;
+};
+
 struct tunnel_conn {
+  enum tunnel_conn_state state;
+
   // socket addresses
   struct sockaddr_in* client_addr;
   struct sockaddr_in* target_addr;
@@ -30,8 +62,8 @@ struct tunnel_conn {
   char* http_version;
 
   // buffers for tunneling
-  char* client_to_target_buffer;
-  char* target_to_client_buffer;
+  struct tunnel_buffer client_to_target_buffer;
+  struct tunnel_buffer target_to_client_buffer;
 };
 
 struct tunnel_conn* init_conn();

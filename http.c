@@ -5,35 +5,36 @@
 #include "tunnel_conn.h"
 #include "util.h"
 
-#define DEFAULT_TARGET_PORT "80"
+#define DEFAULT_TARGET_PORT "443"
 
-int parse_http_connect_message(char* message, struct tunnel_conn* connection) {
+int parse_http_connect_message(char* message, char** host_parsed, char** port_parsed, char** http_version_parsed) {
   // CONNECT google.com:443 HTTP/1.0
   char* saveptr;
-  char* token = strtok_r(message, " ", &saveptr);
-  if (token == NULL || strcmp(token, "CONNECT") != 0) {
+  char* connect_token = strtok_r(message, " ", &saveptr);
+  if (connect_token == NULL || strcmp(connect_token, "CONNECT") != 0) {
     return -1;
   }
 
   char* host_port_token = strtok_r(NULL, " ", &saveptr);
+  if (host_port_token == NULL) {
+    return -1;
+  }
   char* host_port_saveptr;
-  const char* host = strtok_r(host_port_token, ":", &host_port_saveptr);
-  const char* port = strtok_r(NULL, ":", &host_port_saveptr);
+  char* host = strtok_r(host_port_token, ":", &host_port_saveptr);
+  char* port = strtok_r(NULL, ":", &host_port_saveptr);
   if (port == NULL) {
     port = DEFAULT_TARGET_PORT;
   }
 
   // HTTP/1.1 or HTTP/1.0
-  const char* http_version = strtok_r(NULL, " \r\n", &saveptr);
+  char* http_version = strtok_r(NULL, " \r\n", &saveptr);
   if (http_version == NULL || (strcmp(http_version, "HTTP/1.0") != 0 && strcmp(http_version, "HTTP/1.1") != 0)) {
     return -1;
   }
 
-  strncpy(connection->target_host, host, MAX_HOST_LEN);
-  strncpy(connection->target_port, port, MAX_PORT_LEN);
-  strncpy(connection->http_version, http_version, HTTP_VERSION_LEN);
-
-  set_target_hostport(connection);
+  *host_parsed = host;
+  *port_parsed = port;
+  *http_version_parsed = http_version;
 
   return 0;
 }

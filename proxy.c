@@ -97,82 +97,105 @@ int tcp_connect_to_target(struct tunnel_conn* conn) {
   return sock;
 }
 
-/** Read the connect request.
- * Upon return, *read_buffer_ptr will be updated to point to the first character in the buffer that is yet to be
- * processed.
- *
- * Returns the number of characters left in the buffer.
- */
-
-ssize_t handle_http_connect_request(struct tunnel_conn* conn, char** read_buffer_ptr) {
-  // TODO: convert to async
-  char* read_buffer = conn->client_to_target_buffer;
-  read_buffer[0] = '\0';
-  ssize_t n_bytes_read = 0;
+ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
+  buf->empty[0] = '\0';
 
   while (1) {
-    char* next_ptr = read_buffer + n_bytes_read;
-    size_t remaining_capacity = BUFFER_SIZE - 1 - n_bytes_read;
+    size_t remaining_capacity = BUFFER_SIZE - 1 - (buf->empty - buf->start);
     if (remaining_capacity <= 0) {
-      break;
+      return -2;
     }
 
-    ssize_t n_bytes_read_this_time = read(conn->client_socket, next_ptr, remaining_capacity);
-    if (n_bytes_read_this_time == 0) {
-      DEBUG_LOG(
-          "client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
-          conn->client_hostport,
-          n_bytes_read,
-          read_buffer);
-      return -1;
-    } else if (n_bytes_read_this_time < 0) {
-      if (errno == EINTR) {
-        continue;  // interrupted by signal, try again
-      }
-
-      char* errno_desc = errno2s(errno);
-      DEBUG_LOG(
-          "reading for CONNECT from %s failed: %s, received %d bytes: %s",
-          conn->client_hostport,
-          errno_desc,
-          n_bytes_read,
-          read_buffer);
-      free(errno_desc);
-      return -1;
+    ssize_t n_bytes_read = read(read_fd, buf->empty, remaining_capacity);
+    if (n_bytes_read == -1 && errno == EINTR) {
+      // interrupted by signal, try again
+      continue;
+    }
+    if (n_bytes_read <= 0) {
+      return n_bytes_read;
     }
 
-    n_bytes_read += n_bytes_read_this_time;
-    read_buffer[n_bytes_read] = '\0';
+    buf->empty += n_bytes_read;
+    buf->empty[0] = '\0';
+    return n_bytes_read;
+  }
+}
 
-    char* double_crlf = strstr(read_buffer, "\r\n\r\n");
-    if (double_crlf != NULL) {
-      // received full CONNECT message
-      if (parse_http_connect_message(read_buffer, conn) < 0) {
-        // malformed CONNECT
-        DEBUG_LOG("couldn't parse CONNECT message: %s", read_buffer);
-        return -1;
-      }
-      char* next_char = double_crlf + 4;  // skip over the double crlf
-      *read_buffer_ptr = next_char;
-      return n_bytes_read - (next_char - read_buffer);
-    }
+/**
+ * @param conn
+ * @return -1 if an error occurred and conn should be closed; 0 if CONNECT was found and parsed; 1 if we need more
+ * bytes.
+ */
+int find_and_parse_http_connect(struct tunnel_conn* conn) {
+  struct tunnel_buffer* buf = &conn->client_to_target_buffer;
+  ssize_t n_bytes_read = read_into_buffer(conn->client_socket, buf);
+
+  if (n_bytes_read == 0) {
+    DEBUG_LOG(
+        "client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
+        conn->client_hostport,
+        buf->empty - buf->start,
+        buf->start);
+    return -1;
+  } else if (n_bytes_read < 0) {
+    char* errno_desc = errno2s(errno);
+    DEBUG_LOG(
+        "reading for CONNECT from %s failed: %s, received %d bytes: %s",
+        conn->client_hostport,
+        errno_desc,
+        buf->empty - buf->start,
+        buf->start);
+    free(errno_desc);
+    return -1;
   }
 
-  DEBUG_LOG("no CONNECT message until buffer is full, abort");
-  return -1;
+  char* double_crlf = strstr(buf->start, "\r\n\r\n");
+  if (double_crlf != NULL) {
+    // received full CONNECT message
+    char *host, *port, *http_version;
+    if (parse_http_connect_message(buf->start, &host, &port, &http_version) < 0) {
+      // malformed CONNECT
+      DEBUG_LOG("couldn't parse CONNECT message: %s", buf->start);
+      return -1;
+    }
+
+    strncpy(conn->target_host, host, MAX_HOST_LEN);
+    strncpy(conn->target_port, port, MAX_PORT_LEN);
+    strncpy(conn->http_version, http_version, HTTP_VERSION_LEN);
+
+    set_target_hostport(conn);
+
+    buf->consumable = double_crlf + 4;  // skip over the double crlf
+
+    DEBUG_LOG("received CONNECT request: %s %s:%s", conn->http_version, conn->target_host, conn->target_port);
+
+    return 0;
+  }
+
+  // we don't have an HTTP message yet, can we read more bytes?
+
+  if (buf->empty >= buf->start + BUFFER_SIZE - 1) {
+    // no, the buffer is full
+    DEBUG_LOG("no CONNECT message from %s until buffer is full, buffer content: %s", conn->client_hostport, buf->start);
+    return -1;
+  }
+
+  // let's read more bytes
+  return 1;
 }
 
 void relay_sockets(struct tunnel_conn* conn, bool client_to_target) {
+  // TODO: shift buffer pointers in case of partial writes
   int read_sock = client_to_target ? conn->client_socket : conn->target_socket;
   int write_sock = client_to_target ? conn->target_socket : conn->client_socket;
   const char* source_hostport = client_to_target ? conn->client_hostport : conn->target_hostport;
   const char* dest_hostport = client_to_target ? conn->target_hostport : conn->client_hostport;
-  char* buffer = client_to_target ? conn->client_to_target_buffer : conn->target_to_client_buffer;
+  struct tunnel_buffer* buffer = client_to_target ? &conn->client_to_target_buffer : &conn->target_to_client_buffer;
 
   DEBUG_LOG("relaying data (%s) -> (%s)", source_hostport, dest_hostport);
 
   while (1) {
-    ssize_t bytes_read = read(read_sock, buffer, BUFFER_SIZE);
+    ssize_t bytes_read = read(read_sock, buffer->start, BUFFER_SIZE);
     if (bytes_read <= 0) {
       if (shutdown(write_sock, SHUT_RDWR) < 0) {
         perror("close after one end closes");
@@ -180,7 +203,7 @@ void relay_sockets(struct tunnel_conn* conn, bool client_to_target) {
       break;
     }
     DEBUG_LOG("received %zu bytes (%s) -> (%s)", bytes_read, source_hostport, dest_hostport);
-    ssize_t bytes_written = write(write_sock, buffer, bytes_read);
+    ssize_t bytes_written = write(write_sock, buffer->start, bytes_read);
     if (bytes_written < 0) {
       break;
     }
@@ -196,14 +219,6 @@ void* relay_sockets_target_to_client_thread_func_wrapper(void* args) {
 }
 
 void handle_new_connection(struct tunnel_conn* conn) {
-  char* next_char;
-  ssize_t bytes_remaining = handle_http_connect_request(conn, &next_char);
-  if (bytes_remaining < 0) {
-    return;
-  }
-
-  DEBUG_LOG("received CONNECT request: %s %s:%s", conn->http_version, conn->target_host, conn->target_port);
-
   int target_socket = tcp_connect_to_target(conn);
   if (target_socket < 0) {
     send_unsuccessful_connect_response(conn);
@@ -216,12 +231,16 @@ void handle_new_connection(struct tunnel_conn* conn) {
   send_successful_connect_response(conn);
 
   // send the left-over bytes we read from the client to the server
-  if (bytes_remaining > 0) {
-    DEBUG_LOG("sending %d left over bytes after CONNECT", bytes_remaining);
-    if (write(target_socket, next_char, bytes_remaining) < 0) {
+  size_t n_bytes_remaining = conn->client_to_target_buffer.empty - conn->client_to_target_buffer.consumable;
+  if (n_bytes_remaining > 0) {
+    DEBUG_LOG("sending %d left over bytes after CONNECT", n_bytes_remaining);
+    if (write(target_socket, conn->client_to_target_buffer.consumable, n_bytes_remaining) < 0) {
       DEBUG_LOG("failed to send left over bytes from CONNECT");
       return;
     }
+    // reset the buffer
+    conn->client_to_target_buffer.consumable = conn->client_to_target_buffer.start;
+    conn->client_to_target_buffer.empty = conn->client_to_target_buffer.start;
   }
 
   pthread_t worker;
@@ -237,6 +256,60 @@ void* handle_new_connection_thread_func_wrapper(void* args) {
   handle_new_connection(conn);
   free_conn(conn);
   pthread_exit(NULL);
+}
+
+void accept_incoming_connections(int epoll_fd, int listening_socket) {
+  while (1) {
+    struct sockaddr_in client_addr;
+    socklen_t addrlen = sizeof(struct sockaddr_in);
+
+    // TODO: accept as non-blocking sockets?
+    int client_socket = accept(listening_socket, (struct sockaddr*)&client_addr, &addrlen);
+    if (client_socket < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        // processed all incoming connections
+        return;
+      } else if (errno == EINTR) {
+        // interrupted by signal, retry
+        continue;
+      } else {
+        // unexpected error in accepting the connection
+        char* error_desc = errno2s(errno);
+        DEBUG_LOG("accept failed: %s", error_desc);
+        free(error_desc);
+        return;
+      }
+    }
+
+    struct tunnel_conn* conn = init_conn();
+    memcpy(conn->client_addr, &client_addr, addrlen);
+    conn->client_socket = client_socket;
+    set_client_hostport(conn);
+
+    DEBUG_LOG("Received connection from %s", conn->client_hostport);
+
+    // add client socket to epoll and wait for readability
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLONESHOT;
+    event.data.ptr = conn;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event);
+  }
+}
+
+void handle_readability_in_accepted_state(int epoll_fd, struct tunnel_conn* conn) {
+  int result = find_and_parse_http_connect(conn);
+  if (result < 0) {
+    free_conn(conn);
+  } else if (result == 0) {
+    pthread_t worker;
+    pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, conn);
+  } else {
+    // need to read more bytes, wait for readability again
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLONESHOT;
+    event.data.ptr = conn;
+    epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event);
+  }
 }
 
 int main(int argc, char** argv) {
@@ -259,14 +332,16 @@ int main(int argc, char** argv) {
 
   struct epoll_event event, events[EPOLL_MAX_EVENTS];
 
-  event.data.fd = listening_socket;
-  event.events = EPOLLIN | EPOLLET | EPOLLEXCLUSIVE;
+  // NULL means we have events on listening socket
+  event.data.ptr = NULL;
+  event.events = EPOLLIN;
   // TODO: when multithreading, test whether thundering herd will occur
   // TODO: to distribute the new connections to multiple threads, we may need to use LT instead of ET
   if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listening_socket, &event) < 0) {
     die(hsprintf("failed to add listening socket into epoll: %s", errno2s(errno)));
   }
 
+  // event loop
   while (1) {
     int num_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
     DEBUG_LOG("epoll_wait returned %d", num_events);
@@ -275,33 +350,26 @@ int main(int argc, char** argv) {
       break;
     }
 
-    struct sockaddr_in client_addr;
-    socklen_t addrlen = sizeof(struct sockaddr_in);
-    while (1) {
-      // TODO: aceept as non-blocking sockets
-      int client_socket = accept(listening_socket, (struct sockaddr*)&client_addr, &addrlen);
-      if (client_socket < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          // processed all incoming connections
-          break;
-        } else if (errno == EINTR) {
-          // interrupted by signal, retry
-          continue;
-        } else {
-          // unexpected error in accepting the connection
-          die(hsprintf("accept4 failed: %s", errno2s(errno)));
+    for (int i = 0; i < num_events; i++) {
+      if (events[i].data.ptr == NULL) {
+        // events on listening socket
+        if (events[i].events & EPOLLERR) {
+          DEBUG_LOG("epoll reported error on listening socket");
         }
+        accept_incoming_connections(epoll_fd, listening_socket);
+      } else {
+        // events on existing connection
+        struct tunnel_conn* conn = events[i].data.ptr;
+        if (events[i].events & EPOLLERR) {
+          DEBUG_LOG(
+              "epoll reported error on tunnel connection (%s) -> (%s)", conn->client_hostport, conn->target_hostport);
+        }
+        // TODO: handle different states
+        if (conn->state != state_accepted) {
+          die(hsprintf("unexpected state in tunnel connection: %d", conn->state));
+        }
+        handle_readability_in_accepted_state(epoll_fd, conn);
       }
-
-      struct tunnel_conn* conn = init_conn();
-      memcpy(conn->client_addr, &client_addr, addrlen);
-      conn->client_socket = client_socket;
-      set_client_hostport(conn);
-
-      DEBUG_LOG("Received connection from %s", conn->client_hostport);
-
-      pthread_t worker;
-      pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, conn);
     }
   }
 
