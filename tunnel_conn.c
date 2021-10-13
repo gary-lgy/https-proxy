@@ -8,7 +8,6 @@
 struct tunnel_conn* init_conn() {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
-  conn->state = state_accepted;
   conn->client_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->target_addr = calloc(1, sizeof(struct sockaddr_in));
   conn->client_socket = -1;

@@ -2,7 +2,7 @@ CC = /usr/bin/gcc
 SHELL = /usr/bin/bash
 CFLAGS = -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
 LFLAGS = -lpthread
-SRC_FILES = proxy.c http.c log.c util.c tunnel_conn.c
+SRC_FILES = proxy.c http.c log.c util.c tunnel_conn.c epoll_cb.c
 OUT_DIR = out
 BIN = proxy
 

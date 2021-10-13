@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -8,6 +9,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include "epoll_cb.h"
 #include "http.h"
 #include "log.h"
 #include "tunnel_conn.h"
@@ -43,20 +45,6 @@ int create_bind_listen(unsigned short port) {
   return listening_socket;
 }
 
-int tcp_connect(const struct sockaddr_in* remote_addr) {
-  int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (sock < 0) {
-    return -1;
-  }
-
-  if (connect(sock, remote_addr, sizeof(struct sockaddr_in)) < 0) {
-    close(sock);
-    return -1;
-  }
-
-  return sock;
-}
-
 int lookup_host_addr(const char* hostname, const char* port, struct addrinfo** results) {
   struct addrinfo hints;
   memset(&hints, 0, sizeof(struct addrinfo));
@@ -64,6 +52,7 @@ int lookup_host_addr(const char* hostname, const char* port, struct addrinfo** r
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
 
+  // TODO: use getaddrinfo_a and signalfd to achieve non-blocking dns resolution
   int gai_errno = getaddrinfo(hostname, port, &hints, results);
   if (gai_errno != 0) {
     DEBUG_LOG(hsprintf("target_host resolution failed: %s", gai_strerror(gai_errno)));
@@ -73,28 +62,62 @@ int lookup_host_addr(const char* hostname, const char* port, struct addrinfo** r
   return 0;
 }
 
-int tcp_connect_to_target(struct tunnel_conn* conn) {
-  struct addrinfo *host_addrs, *rp;
+void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
+  for (; cb->next_addr != NULL; cb->next_addr = cb->next_addr->ai_next) {
+    int sock = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+    if (sock < 0) {
+      continue;
+    }
 
-  if (lookup_host_addr(conn->target_host, conn->target_port, &host_addrs) < 0) {
-    return -1;
-  }
+    while (1) {
+      if (connect(sock, cb->next_addr->ai_addr, sizeof(struct sockaddr_in)) == 0 || errno == EAGAIN ||
+          errno == EINPROGRESS) {
+        // we're connected or connecting to the current address
+        cb->next_addr = cb->next_addr->ai_next;
+        cb->sock = sock;
 
-  int sock;
-  for (rp = host_addrs; rp != NULL; rp = rp->ai_next) {
-    if ((sock = tcp_connect((struct sockaddr_in*)rp->ai_addr)) > 0) {
-      // succeeded
-      memcpy(conn->target_addr, rp->ai_addr, rp->ai_addrlen);
+        struct epoll_event event;
+        event.events = EPOLLOUT | EPOLLONESHOT;
+        event.data.ptr = cb;
+        // TODO: check return values of epoll_ctl
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->sock, &event);
+        return;
+      }
+
+      if (errno == EINTR) {
+        // interrupted, try again
+        continue;
+      }
+
+      // some unexpected error
+      close(sock);
       break;
     }
   }
-  freeaddrinfo(host_addrs);
 
-  if (rp == NULL) {  // No address succeeded
-    return -1;
+  // none of the addresses work
+  DEBUG_LOG("failed to connect to target %s", cb->conn->target_hostport);
+  send_unsuccessful_connect_response(cb->conn);
+  freeaddrinfo(cb->host_addrs);
+  free_conn(cb->conn);
+  free(cb);
+}
+
+void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
+  // TODO: send 400 asynchronously
+  struct epoll_connecting_cb* cb = malloc(sizeof(struct epoll_connecting_cb));
+  cb->type = cb_type_connecting;
+  cb->conn = conn;
+
+  if (lookup_host_addr(conn->target_host, conn->target_port, &cb->host_addrs) < 0) {
+    send_unsuccessful_connect_response(conn);
+    free(cb);
+    free_conn(conn);
+    return;
   }
+  cb->next_addr = cb->host_addrs;
 
-  return sock;
+  init_connection_to_target(epoll_fd, cb);
 }
 
 ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
@@ -219,22 +242,13 @@ void* relay_sockets_target_to_client_thread_func_wrapper(void* args) {
 }
 
 void handle_new_connection(struct tunnel_conn* conn) {
-  int target_socket = tcp_connect_to_target(conn);
-  if (target_socket < 0) {
-    send_unsuccessful_connect_response(conn);
-    DEBUG_LOG("failed to connect to target %s", conn->target_hostport);
-    return;
-  }
-  conn->target_socket = target_socket;
-  DEBUG_LOG("connected to %s", conn->target_hostport);
-
   send_successful_connect_response(conn);
 
   // send the left-over bytes we read from the client to the server
   size_t n_bytes_remaining = conn->client_to_target_buffer.empty - conn->client_to_target_buffer.consumable;
   if (n_bytes_remaining > 0) {
     DEBUG_LOG("sending %d left over bytes after CONNECT", n_bytes_remaining);
-    if (write(target_socket, conn->client_to_target_buffer.consumable, n_bytes_remaining) < 0) {
+    if (write(conn->target_socket, conn->client_to_target_buffer.consumable, n_bytes_remaining) < 0) {
       DEBUG_LOG("failed to send left over bytes from CONNECT");
       return;
     }
@@ -289,26 +303,76 @@ void accept_incoming_connections(int epoll_fd, int listening_socket) {
     DEBUG_LOG("Received connection from %s", conn->client_hostport);
 
     // add client socket to epoll and wait for readability
+    struct epoll_accepted_cb* cb = malloc(sizeof(struct epoll_accepted_cb));
+    cb->type = cb_type_accepted;
+    cb->conn = conn;
+
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLONESHOT;
-    event.data.ptr = conn;
+    event.data.ptr = cb;
+    // TODO: check return value
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event);
   }
 }
 
-void handle_readability_in_accepted_state(int epoll_fd, struct tunnel_conn* conn) {
+void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t events) {
+  struct tunnel_conn* conn = cb->conn;
+
+  if (events & EPOLLERR) {
+    DEBUG_LOG(
+        "epoll reported error on tunnel connection (%s) -> (%s) in accepted state",
+        conn->client_hostport,
+        conn->target_hostport);
+  }
+
   int result = find_and_parse_http_connect(conn);
   if (result < 0) {
     free_conn(conn);
+    free(cb);
   } else if (result == 0) {
-    pthread_t worker;
-    pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, conn);
+    // try connecting to target
+    free(cb);
+    enter_connecting_state(epoll_fd, conn);
   } else {
     // need to read more bytes, wait for readability again
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLONESHOT;
-    event.data.ptr = conn;
+    event.data.ptr = cb;
     epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event);
+  }
+}
+
+void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t events) {
+  if (events & EPOLLERR) {
+    DEBUG_LOG(
+        "epoll reported error on tunnel connection (%s) -> (%s) in connecting state",
+        cb->conn->client_hostport,
+        cb->conn->target_hostport);
+  }
+
+  // Check if the connection succeeded
+  struct sockaddr_in addr;
+  socklen_t addrlen = sizeof(addr);
+  if (getpeername(cb->sock, &addr, &addrlen) < 0) {
+    // connection failed; try connecting with another address
+    shutdown(cb->sock, SHUT_RDWR);
+    close(cb->sock);
+    init_connection_to_target(epoll_fd, cb);
+  } else {
+    // connection succeeded
+    cb->conn->target_socket = cb->sock;
+    memcpy(cb->conn->target_addr, &addr, sizeof(struct sockaddr_in));
+    DEBUG_LOG("connected to %s", cb->conn->target_hostport);
+
+    // TODO: examine whether we should use non blocking sockets
+    const int flags = fcntl(cb->sock, F_GETFL, 0) & (~O_NONBLOCK);
+    fcntl(cb->sock, F_SETFL, flags);
+
+    pthread_t worker;
+    pthread_create(&worker, NULL, handle_new_connection_thread_func_wrapper, cb->conn);
+
+    freeaddrinfo(cb->host_addrs);
+    free(cb);
   }
 }
 
@@ -359,16 +423,12 @@ int main(int argc, char** argv) {
         accept_incoming_connections(epoll_fd, listening_socket);
       } else {
         // events on existing connection
-        struct tunnel_conn* conn = events[i].data.ptr;
-        if (events[i].events & EPOLLERR) {
-          DEBUG_LOG(
-              "epoll reported error on tunnel connection (%s) -> (%s)", conn->client_hostport, conn->target_hostport);
+        struct epoll_cb* cb = events[i].data.ptr;
+        if (cb->type == cb_type_accepted) {
+          handle_accepted_cb(epoll_fd, (struct epoll_accepted_cb*)cb, events[i].events);
+        } else if (cb->type == cb_type_connecting) {
+          handle_connecting_cb(epoll_fd, (struct epoll_connecting_cb*)cb, events[i].events);
         }
-        // TODO: handle different states
-        if (conn->state != state_accepted) {
-          die(hsprintf("unexpected state in tunnel connection: %d", conn->state));
-        }
-        handle_readability_in_accepted_state(epoll_fd, conn);
       }
     }
   }

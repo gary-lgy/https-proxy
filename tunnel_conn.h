@@ -11,13 +11,6 @@
 #define HTTP_VERSION_LEN 9  // HTTP/1.1
 #define HOST_PORT_BUF_SIZE 1024
 
-enum tunnel_conn_state {
-  state_accepted,
-  state_connecting,
-  state_connected,
-  state_tunneling,
-};
-
 /**
  * The buffer layout looks like this:
  * The first section is data that has already been consumed.
@@ -42,8 +35,6 @@ struct tunnel_buffer {
 };
 
 struct tunnel_conn {
-  enum tunnel_conn_state state;
-
   // socket addresses
   struct sockaddr_in* client_addr;
   struct sockaddr_in* target_addr;
