@@ -6,7 +6,7 @@
 // https://stackoverflow.com/questions/8884335/print-the-file-name-line-number-and-function-name-of-a-calling-function-c-pro
 // and
 // https://en.cppreference.com/w/c/io/vfprintf
-void debug_log(const char* filename, int lineno, const char* fn_name, const char* fmt, ...) {
+void log_(const char* filename, int lineno, const char* fn_name, const char* fmt, ...) {
   // format the time string
   struct timespec ts;
   timespec_get(&ts, TIME_UTC);
