@@ -16,7 +16,7 @@ debug_build: clean
 
 build: clean
 	mkdir -p $(OUT_DIR)
-	$(CC) $(CFLAGS) -DNDEBUG -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
+	$(CC) $(CFLAGS) -DNDEBUG -O2 -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
 
 clean:
 	rm -rf $(OUT_DIR)
