@@ -2,6 +2,7 @@
 #define HTTPS_PROXY_EPOLL_CB_H
 
 #include "tunnel_conn.h"
+
 enum epoll_cb_type {
   cb_type_accepted,
   cb_type_connecting,
@@ -24,6 +25,7 @@ struct epoll_connecting_cb {
   struct addrinfo* host_addrs;
   struct addrinfo* next_addr;
   int sock;
+  bool failed;
 };
 
 // Represents a link between source and destination.

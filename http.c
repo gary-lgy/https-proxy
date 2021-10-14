@@ -1,9 +1,5 @@
 #include "http.h"
-#include <malloc.h>
 #include <string.h>
-#include <unistd.h>
-#include "tunnel_conn.h"
-#include "util.h"
 
 #define DEFAULT_TARGET_PORT "443"
 
@@ -37,18 +33,4 @@ int parse_http_connect_message(char* message, char** host_parsed, char** port_pa
   *http_version_parsed = http_version;
 
   return 0;
-}
-
-int send_successful_connect_response(const struct tunnel_conn* conn) {
-  char* response_line = hsprintf("%s 200 Connection Established \r\n\r\n", conn->http_version);
-  ssize_t status = write(conn->client_socket, response_line, strlen(response_line));
-  free(response_line);
-  return status < 0 ? -1 : 0;
-}
-
-int send_unsuccessful_connect_response(const struct tunnel_conn* conn) {
-  char* response_line = hsprintf("%s 400 Bad Request \r\n\r\n", conn->http_version);
-  ssize_t status = write(conn->client_socket, response_line, strlen(response_line));
-  free(response_line);
-  return status < 0 ? -1 : 0;
 }
