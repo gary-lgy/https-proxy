@@ -14,7 +14,7 @@ accepted --> [*] : received invalid CONNECT message ||\n cc closed by client /\n
 
 connecting : resolve the target hostname to IP address and \n try to establish TCP connection to target
 
-connecting --> [*] : failed to connect to target /\nsend 404 response to client and close cc
+connecting ---> [*] : failed to connect to target /\nsend 404 response to client and close cc
 
 state tunneling {
 
@@ -41,7 +41,7 @@ state tunneling {
     cc_rw --> cc_w_tc_w: received from cc /\nwait to send to tc
 }
 
-connecting ---> cc_w_tc_w : tc connected /\n send 200 Connection Established to client;\n any bytes read from client after CONNECT to target
+connecting --> cc_w_tc_w : tc connected /\n send 200 Connection Established to client;\n any bytes read from client after CONNECT to target
 
 tunneling --> [*] : either cc or tc is closed by the other party /\n close cc and tc
 
