@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include "lib/asyncaddrinfo/asyncaddrinfo.h"
 #include "log.h"
 #include "states/epoll_cb.h"
 #include "util.h"
@@ -43,7 +44,7 @@ struct event_loop_args {
   int listening_socket;
 };
 
-void event_loop_main(struct event_loop_args* args) {
+void handle_connections_in_event_loop(struct event_loop_args* args) {
   int epoll_fd = epoll_create1(0);
   if (epoll_fd < 0) {
     die(hsprintf("failed to create epoll instance: %s", errno2s(errno)));
@@ -97,10 +98,10 @@ void event_loop_main(struct event_loop_args* args) {
   }
 }
 
-void* event_loop_main_pthread_wrapper(void* raw_args) {
+void* handle_connections_in_event_loop_pthread_wrapper(void* raw_args) {
   struct event_loop_args* args = raw_args;
   thread_id__ = args->thread_id;
-  event_loop_main(args);
+  handle_connections_in_event_loop(args);
   free(args);
   return NULL;
 }
@@ -141,34 +142,50 @@ int main(int argc, char** argv) {
     }
   }
 
-  printf("- listening port:        %hu\n", listening_port);
-  printf("- telemetry enabled:     %s\n", telemetry_enabled ? "yes" : "no");
-  printf("- blacklist filename:    %s\n", blacklist_filename);
-  printf("- max number of threads: %hu\n", max_threads);
+  // use a quarter of the threads for async getaddrinfo
+  // use the rest (including the main thread) to run event loops and handle connections
+  unsigned short asyncaddrinfo_threads = max_threads / 4;
+  if (asyncaddrinfo_threads < 1) {
+    asyncaddrinfo_threads = 1;
+  }
+  unsigned short connection_threads = max_threads - asyncaddrinfo_threads;
+
+  printf("- listening port:                         %hu\n", listening_port);
+  printf("- telemetry enabled:                      %s\n", telemetry_enabled ? "yes" : "no");
+  printf("- blacklist filename:                     %s\n", blacklist_filename);
+  printf("- number of connection threads:           %hu\n", connection_threads);
+  printf("- number of async addrinfo (DNS) threads: %hu\n", asyncaddrinfo_threads);
 
   int listening_socket = create_bind_listen(listening_port);
 
-  pthread_t workers[max_threads - 1];
-  for (int i = 0; i < max_threads - 1; i++) {
+  pthread_t workers[connection_threads - 1];
+  for (int i = 0; i < connection_threads - 1; i++) {
     struct event_loop_args* args = malloc(sizeof(struct event_loop_args));
     args->listening_socket = listening_socket;
     args->telemetry_enabled = telemetry_enabled;
     args->thread_id = i + 1;
-    pthread_create(&workers[i], NULL, event_loop_main_pthread_wrapper, args);
+    pthread_create(&workers[i], NULL, handle_connections_in_event_loop_pthread_wrapper, args);
   }
 
+  asyncaddrinfo_init(asyncaddrinfo_threads);
+
   printf("Accepting requests\n");
-  // main thread does the same work
+  // run another event loop on the main thread
   struct event_loop_args args = {
       .listening_socket = listening_socket,
       .telemetry_enabled = telemetry_enabled,
       .thread_id = 0,
   };
-  event_loop_main_pthread_wrapper(&args);
+  handle_connections_in_event_loop_pthread_wrapper(&args);
 
   if (close(listening_socket) < 0) {
     die(hsprintf("failed to close listening socket: %s", errno2s(errno)));
   }
+
+  for (int i = 0; i < connection_threads; i++) {
+    pthread_join(workers[i], NULL);
+  }
+  asyncaddrinfo_cleanup();
 
   return 0;
 }

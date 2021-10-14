@@ -22,9 +22,10 @@ struct epoll_accepted_cb {
 struct epoll_connecting_cb {
   enum epoll_cb_type type;
   struct tunnel_conn* conn;
+  int asyncaddrinfo_fd;
   struct addrinfo* host_addrs;
   struct addrinfo* next_addr;
-  int sock;
+  int target_conn_sock;
   bool failed;
 };
 

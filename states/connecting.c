@@ -8,6 +8,7 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 #include "../http.h"
+#include "../lib/asyncaddrinfo/asyncaddrinfo.h"
 #include "../log.h"
 #include "../util.h"
 #include "epoll_cb.h"
@@ -44,12 +45,12 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
         errno == EINPROGRESS) {
       // we're connected or connecting to the current address
       cb->next_addr = cb->next_addr->ai_next;
-      cb->sock = sock;
+      cb->target_conn_sock = sock;
 
       struct epoll_event event;
       event.events = EPOLLOUT | EPOLLONESHOT;
       event.data.ptr = cb;
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->sock, &event) < 0) {
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_conn_sock, &event) < 0) {
         char* error_desc = errno2s(errno);
         DEBUG_LOG("failed to add target socket into epoll: %s", error_desc);
         free(error_desc);
@@ -68,20 +69,32 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
 
   // none of the addresses work
   DEBUG_LOG("failed to connect to target %s: no more addresses to try", cb->conn->target_hostport);
+  freeaddrinfo(cb->host_addrs);
   fail_connecting_cb(epoll_fd, cb);
 }
 
-int lookup_host_addr(const char* hostname, const char* port, struct addrinfo** results) {
+int submit_hostname_lookup(int epoll_fd, struct epoll_connecting_cb* cb, const char* hostname, const char* port) {
   struct addrinfo hints;
   memset(&hints, 0, sizeof(struct addrinfo));
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
 
-  // TODO: use getaddrinfo_a and signalfd to achieve non-blocking dns resolution
-  int gai_errno = getaddrinfo(hostname, port, &hints, results);
-  if (gai_errno != 0) {
-    DEBUG_LOG(hsprintf("target_host resolution failed: %s", gai_strerror(gai_errno)));
+  cb->asyncaddrinfo_fd = asyncaddrinfo_resolve(hostname, port, &hints);
+
+  struct epoll_event event;
+  event.events = EPOLLIN | EPOLLONESHOT;
+  event.data.ptr = cb;
+
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->asyncaddrinfo_fd, &event) < 0) {
+    char* error_desc = errno2s(errno);
+    DEBUG_LOG(
+        "failed to add asyncaddrinfo_fd for (%s) -> (%s) into epoll: %s",
+        cb->conn->client_hostport,
+        cb->conn->target_hostport,
+        error_desc);
+    free(error_desc);
+    close(cb->asyncaddrinfo_fd);
     return -1;
   }
 
@@ -94,13 +107,10 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
   cb->conn = conn;
   cb->failed = false;
 
-  if (lookup_host_addr(conn->target_host, conn->target_port, &cb->host_addrs) < 0) {
+  if (submit_hostname_lookup(epoll_fd, cb, conn->target_host, conn->target_port) < 0) {
     fail_connecting_cb(epoll_fd, cb);
     return;
   }
-  cb->next_addr = cb->host_addrs;
-
-  init_connection_to_target(epoll_fd, cb);
 }
 
 void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
@@ -177,22 +187,45 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
     return;
   }
 
-  // Check if the connection succeeded
-  struct sockaddr_in addr;
-  socklen_t addrlen = sizeof(addr);
-  if (getpeername(cb->sock, &addr, &addrlen) < 0) {
-    // connection failed; try connecting with another address
-    shutdown(cb->sock, SHUT_RDWR);
-    close(cb->sock);
+  // we're either waiting for connection to target to complete or asyncaddrinfo lookup result
+  // for the former, we are waiting for EPOLLIN, and for the latter, we are waiting for EPOLLOUT
+  if (events & EPOLLIN) {
+    // asyncaddrinfo result came back
+    int gai_errno = asyncaddrinfo_result(cb->asyncaddrinfo_fd, &cb->host_addrs);
+    if (gai_errno != 0) {
+      DEBUG_LOG(
+          "host resolution for (%s) -> (%s) failed: %s",
+          cb->conn->client_hostport,
+          cb->conn->target_hostport,
+          gai_strerror(gai_errno));
+      fail_connecting_cb(epoll_fd, cb);
+      return;
+    }
+    cb->asyncaddrinfo_fd = -1;
+
+    DEBUG_LOG("host resolution succeeded for (%s) -> (%s)", cb->conn->client_hostport, cb->conn->target_hostport);
+
+    // start connecting
+    cb->next_addr = cb->host_addrs;
     init_connection_to_target(epoll_fd, cb);
   } else {
-    // connection succeeded
-    cb->conn->target_socket = cb->sock;
-    DEBUG_LOG("connected to %s", cb->conn->target_hostport);
+    // connection succeeded or failed
+    struct sockaddr_in addr;
+    socklen_t addrlen = sizeof(addr);
+    if (getpeername(cb->target_conn_sock, &addr, &addrlen) < 0) {
+      // connection failed; try connecting with another address
+      shutdown(cb->target_conn_sock, SHUT_RDWR);
+      close(cb->target_conn_sock);
+      init_connection_to_target(epoll_fd, cb);
+    } else {
+      // connection succeeded
+      cb->conn->target_socket = cb->target_conn_sock;
+      DEBUG_LOG("connected to %s", cb->conn->target_hostport);
 
-    enter_tunneling_state(epoll_fd, cb->conn);
+      enter_tunneling_state(epoll_fd, cb->conn);
 
-    freeaddrinfo(cb->host_addrs);
-    free(cb);
+      freeaddrinfo(cb->host_addrs);
+      free(cb);
+    }
   }
 }
