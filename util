@@ -5,7 +5,7 @@ if [ "$1" = "run" ]; then
   if [ -n "$2" ]; then
     PORT="$2"
   fi
-  ./out/proxy "$PORT"
+  ./out/proxy "$PORT" 1 "blacklist.txt"
 elif [ "$1" = "thread_count" ]; then
   watch "pgrep -u $USER proxy | xargs ps -o thcount"
 elif [ "$1" = "mem" ]; then

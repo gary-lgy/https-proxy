@@ -200,7 +200,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
   return 1;
 }
 
-void accept_incoming_connections(int epoll_fd, int listening_socket) {
+void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled) {
   while (1) {
     struct sockaddr_in client_addr;
     socklen_t addrlen = sizeof(struct sockaddr_in);
@@ -219,7 +219,7 @@ void accept_incoming_connections(int epoll_fd, int listening_socket) {
       }
     }
 
-    struct tunnel_conn* conn = create_tunnel_conn();
+    struct tunnel_conn* conn = create_tunnel_conn(telemetry_enabled);
     conn->client_socket = client_socket;
     set_client_hostport(conn, &client_addr);
 
@@ -564,14 +564,26 @@ void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t e
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2) {
-    die("provide listen port number as the first argument");
+  if (argc != 4) {
+    die(hsprintf("Usage: %s <port> <flag_telemetry> <filename of blacklist>", argv[0]));
   }
 
   unsigned short listening_port;
   if (parse_port_number(argv[1], &listening_port) < 0) {
     die(hsprintf("failed to parse port number '%s'", argv[1]));
   }
+
+  bool telemetry_enabled;
+  if (strcmp(argv[2], "0") == 0) {
+    telemetry_enabled = false;
+  } else if (strcmp(argv[2], "1") == 0) {
+    telemetry_enabled = true;
+  } else {
+    die(hsprintf("expected flag_telemetry to be either 0 or 1, got %s", argv[2]));
+  }
+
+  // TODO: blacklist
+  //  const char* blacklist_filename = argv[3];
 
   int listening_socket = create_bind_listen(listening_port);
   printf("Listening on port %hu\n", listening_port);
@@ -611,7 +623,7 @@ int main(int argc, char** argv) {
           DEBUG_LOG("listening socket is not readable but epoll woke us up anyway");
           continue;
         }
-        accept_incoming_connections(epoll_fd, listening_socket);
+        accept_incoming_connections(epoll_fd, listening_socket, telemetry_enabled);
       } else {
         // events on existing connection
         struct epoll_cb* cb = events[i].data.ptr;

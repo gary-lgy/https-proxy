@@ -2,6 +2,7 @@
 #define HTTPS_PROXY_TUNNEL_CONN_H
 
 #include <netinet/in.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 #define BUFFER_SIZE 8192
@@ -56,9 +57,13 @@ struct tunnel_conn {
 
   // how many directions of this connection have been closed (0, 1, or 2)
   int halves_closed;
+
+  bool telemetry_enabled;
+  struct timespec started_at;
+  unsigned long long n_bytes_streamed;
 };
 
-struct tunnel_conn* create_tunnel_conn();
+struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled);
 void destroy_tunnel_conn(struct tunnel_conn* conn);
 void set_client_hostport(struct tunnel_conn*, const struct sockaddr_in*);
 void set_target_hostport(struct tunnel_conn*);

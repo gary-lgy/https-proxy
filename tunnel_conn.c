@@ -1,11 +1,13 @@
 #include "tunnel_conn.h"
 #include <arpa/inet.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
-struct tunnel_conn* create_tunnel_conn() {
+struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled) {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_socket = -1;
@@ -30,11 +32,29 @@ struct tunnel_conn* create_tunnel_conn() {
   conn->target_to_client_buffer.empty = buffer;
 
   conn->halves_closed = 0;
+  conn->n_bytes_streamed = 0;
+
+  conn->telemetry_enabled = telemetry_enabled;
+  if (telemetry_enabled) {
+    timespec_get(&conn->started_at, TIME_UTC);
+  }
 
   return conn;
 }
 
 void destroy_tunnel_conn(struct tunnel_conn* conn) {
+  if (conn->telemetry_enabled && conn->target_host[0] != '\0') {
+    struct timespec ended_at;
+    timespec_get(&ended_at, TIME_UTC);
+    unsigned int milliseconds_elapsed =
+        (ended_at.tv_sec - conn->started_at.tv_sec) * 1000 + (ended_at.tv_nsec - conn->started_at.tv_nsec) / 1000000;
+    printf(
+        "Hostname: %s, Size: %llu bytes, Time: %.3f sec\n",
+        conn->target_host,
+        conn->n_bytes_streamed,
+        milliseconds_elapsed / 1000.0);
+  }
+
   if (conn->client_socket_dup >= 0) {
     close(conn->client_socket_dup);
   }
