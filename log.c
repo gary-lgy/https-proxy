@@ -11,7 +11,9 @@ void log_(const char* filename, int lineno, const char* fn_name, const char* fmt
   struct timespec ts;
   timespec_get(&ts, TIME_UTC);
   char time_buf[31];
-  size_t rc = strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", gmtime(&ts.tv_sec));
+  struct tm result;
+  gmtime_r(&ts.tv_sec, &result);
+  size_t rc = strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &result);
   snprintf(time_buf + rc, sizeof(time_buf) - rc, ".%06ld UTC", ts.tv_nsec / 1000);
 
   // format the user-provided message
