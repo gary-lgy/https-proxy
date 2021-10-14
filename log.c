@@ -1,6 +1,10 @@
 #include <stdarg.h>
 #include <stdio.h>
+#include <threads.h>
 #include <time.h>
+#include <unistd.h>
+
+thread_local unsigned short thread_id__;
 
 // Adapted from
 // https://stackoverflow.com/questions/8884335/print-the-file-name-line-number-and-function-name-of-a-calling-function-c-pro
@@ -26,5 +30,5 @@ void log_(const char* filename, int lineno, const char* fn_name, const char* fmt
   vsnprintf(msg_buf, sizeof(msg_buf), fmt, args2);
   va_end(args2);
 
-  fprintf(stderr, "%s [%s (%s:%d)] %s\n", time_buf, fn_name, filename, lineno, msg_buf);
+  fprintf(stderr, "(Thread %hu) %s [%s (%s:%d)] %s\n", thread_id__, time_buf, fn_name, filename, lineno, msg_buf);
 }

@@ -1,6 +1,10 @@
 #ifndef HTTPS_PROXY_LOG_H
 #define HTTPS_PROXY_LOG_H
 
+#include <threads.h>
+
+extern thread_local unsigned short thread_id__;
+
 void log_(const char* filename, int lineno, const char* fn_name, const char* fmt, ...);
 
 #ifndef NDEBUG

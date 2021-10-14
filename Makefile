@@ -1,6 +1,6 @@
 CC = /usr/bin/gcc
 SHELL = /usr/bin/bash
-CFLAGS = -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
+CFLAGS = -B/usr/bin/ -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
 LFLAGS = -lpthread
 SRC_FILES = proxy.c http.c log.c util.c tunnel_conn.c states/accepted.c states/connecting.c states/tunneling.c
 OUT_DIR = out
