@@ -33,11 +33,8 @@ struct epoll_connecting_cb {
 struct epoll_tunneling_cb {
   enum epoll_cb_type type;
   struct tunnel_conn* conn;
-  struct tunnel_buffer* buf;
-  char* source_hostport;
-  char* dest_hostport;
-  int polled_fd;
-  int opposite_fd;
+  bool is_client_to_target;
+  bool is_read;
 };
 
 #endif  // HTTPS_PROXY_EPOLL_CB_H
