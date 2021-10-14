@@ -5,18 +5,6 @@
 
 #define ERRNO_BUF_SIZE 1024
 
-int parse_port_number(const char* raw, unsigned short* port) {
-  char* endptr;
-  unsigned short parsed = strtol(raw, &endptr, 10);
-  if (*endptr != '\0') {
-    // the raw string contains unrecognized characters
-    return -1;
-  }
-  *port = parsed;
-
-  return 0;
-}
-
 // Returns a heap-allocated string formatted as required.
 // TODO: look for memory leaks
 char* hsprintf(const char* fmt, ...) {

@@ -12,6 +12,7 @@
 
 #define CONNECT_BACKLOG 512
 #define EPOLL_MAX_EVENTS 64
+#define DEFAULT_MAX_THREADS 8
 
 int create_bind_listen(unsigned short port) {
   int listening_socket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
@@ -36,12 +37,15 @@ int create_bind_listen(unsigned short port) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    die(hsprintf("Usage: %s <port> <flag_telemetry> <filename of blacklist>", argv[0]));
+  if (argc < 4) {
+    die(hsprintf("Usage: %s <port> <flag_telemetry> <filename of blacklist> [max threads]", argv[0]));
   }
 
-  unsigned short listening_port;
-  if (parse_port_number(argv[1], &listening_port) < 0) {
+  char* endptr;
+
+  unsigned short listening_port = strtol(argv[1], &endptr, 10);
+  if (*endptr != '\0') {
+    // the raw string contains unrecognized characters
     die(hsprintf("failed to parse port number '%s'", argv[1]));
   }
 
@@ -55,10 +59,24 @@ int main(int argc, char** argv) {
   }
 
   // TODO: blacklist
-  //  const char* blacklist_filename = argv[3];
+  const char* blacklist_filename = argv[3];
+
+  unsigned short max_threads = DEFAULT_MAX_THREADS;
+  if (argc >= 4) {
+    max_threads = strtol(argv[4], &endptr, 10);
+    if (*endptr != '\0') {
+      die(hsprintf("failed to parse max threads '%s'", argv[4]));
+    }
+  }
+
+  printf("- listening port:        %hu\n", listening_port);
+  printf("- telemetry enabled:     %s\n", telemetry_enabled ? "yes" : "no");
+  printf("- blacklist filename:    %s\n", blacklist_filename);
+  printf("- max number of threads: %hu\n", max_threads);
 
   int listening_socket = create_bind_listen(listening_port);
-  printf("Listening on port %hu\n", listening_port);
+
+  printf("Accepting requests\n");
 
   int epoll_fd = epoll_create1(0);
   if (epoll_fd < 0) {
