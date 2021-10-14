@@ -44,3 +44,8 @@ char* errno2s(int errnum) {
 
   return buf;
 }
+
+void die(const char* message) {
+  fprintf(stderr, "%s\n", message);
+  exit(EXIT_FAILURE);
+}
