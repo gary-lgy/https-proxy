@@ -1,5 +1,7 @@
 # Transparent HTTPS Proxy
 
+![](./docs/state-transition-diagram.svg)
+
 ## External Libraries Used
 
 ### asyncaddrinfo

@@ -7,21 +7,14 @@ end legend
 
 [*] --> accepted : incoming cc /\n accept cc
 
-accepted : epoll_wait on [cc (for reading HTTP CONNECT)]
+accepted : read HTTP CONNECT message
 
 accepted --> connecting : received valid CONNECT message /\nstart tc
 accepted --> [*] : received invalid CONNECT message ||\n cc closed by client /\nclose cc
 
-connecting : epoll_wait on [tc (for successful TCP connection) cc (in case the client closes cc)]
+connecting : resolve the target hostname to IP address and \n try to establish TCP connection to target
 
-connecting --> [*] : cc closed by client/\nclose cc
 connecting --> [*] : failed to connect to target /\nsend 404 response to client and close cc
-
-connecting --> connected : tc connected
-
-connected : epoll_wait on [cc (for sending 200 OK to client) and tc (in case the client closes cc)]
-
-connected --> [*] : sending 200 response failed || tc closed by target/\nclose cc and tc
 
 state tunneling {
 
@@ -30,26 +23,26 @@ state tunneling {
     tunneling : if we're waiting to write to cc, don't read from tc
     tunneling : if we're waiting to write to tc, don't read from cc
 
-    tc_rw : epoll_wait on [tc (waiting to read and write)]
-    cc_r_tc_r : epoll_wait on [cc(waiting to read), tc (waiting to read)]
-    cc_w_tc_w : epoll_wait on [cc(waiting to write), tc (waiting to write)]
-    cc_rw : epoll_wait on [cc (waiting to read and write)]
+    tc_rw : epoll_wait on [tc (waiting to receive and send)]
+    cc_r_tc_r : epoll_wait on [cc(waiting to receive), tc (waiting to receive)]
+    cc_w_tc_w : epoll_wait on [cc(waiting to send), tc (waiting to send)]
+    cc_rw : epoll_wait on [cc (waiting to receive and send)]
 
-    tc_rw --> cc_r_tc_r : wrote to tc /\nread from cc
-    tc_rw --> cc_w_tc_w : read from tc /\nwrite to cc
+    tc_rw --> cc_r_tc_r : sent to tc /\nwait to receive from cc
+    tc_rw --> cc_w_tc_w : received from tc /\nwait to send to cc
 
-    cc_r_tc_r --> tc_rw : read from cc /\nwrite to tc
-    cc_r_tc_r --> cc_rw : read from tc /\nwrite to cc
+    cc_r_tc_r --> tc_rw : received from cc /\nwait to send to tc
+    cc_r_tc_r --> cc_rw : received from tc /\nwait to send to cc
 
-    cc_w_tc_w --> tc_rw : wrote to cc /\nread from tc
-    cc_w_tc_w --> cc_rw : wrote to tc /\nread from cc
+    cc_w_tc_w --> tc_rw : sent to cc /\nwait to receive from tc
+    cc_w_tc_w --> cc_rw : sent to tc /\nwait to receive from cc
 
-    cc_rw --> cc_r_tc_r: wrote to cc /\nread from tc
-    cc_rw --> cc_w_tc_w: read from cc /\nwrite to tc
+    cc_rw --> cc_r_tc_r: sent to cc /\nwait to receive from tc
+    cc_rw --> cc_w_tc_w: received from cc /\nwait to send to tc
 }
 
-connected --> tc_rw : sending 200 response succeeded /\nsend the bytes right after CONNECT, if any
+connecting ---> cc_w_tc_w : tc connected /\n send 200 Connection Established to client;\n any bytes read from client after CONNECT to target
 
-tunneling -> [*] : either cc or tc is closed by the other party /\n close cc and tc
+tunneling --> [*] : either cc or tc is closed by the other party /\n close cc and tc
 
 @enduml
