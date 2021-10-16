@@ -62,9 +62,14 @@ struct tunnel_conn {
   bool telemetry_enabled;
   struct timespec started_at;
   unsigned long long n_bytes_streamed;
+
+  // blacklist
+  char** blacklist;
+  int blacklist_len;
+  bool is_blocked;
 };
 
-struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled);
+struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist, int blacklist_len);
 void destroy_tunnel_conn(struct tunnel_conn* conn);
 void set_client_hostport(struct tunnel_conn*, const struct sockaddr_in*);
 void set_target_hostport(struct tunnel_conn*);

@@ -40,7 +40,7 @@ struct epoll_tunneling_cb {
   bool is_read;
 };
 
-void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled);
+void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled, char** blacklist, int blacklist_len);
 void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t events);
 
 void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn);

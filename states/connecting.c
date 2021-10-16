@@ -109,6 +109,21 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
   cb->conn = conn;
   cb->failed = false;
 
+  // Check blacklist
+  char** blacklist = conn->blacklist;
+  int blacklist_len = conn->blacklist_len;
+  for (int i = 0; i < blacklist_len; i++) {
+    if (strstr(conn->target_host, blacklist[i]) != NULL) {
+      conn->is_blocked = true;
+      fail_connecting_cb(epoll_fd, cb);
+      DEBUG_LOG(
+        "block target: '%s' as it matches '%s'",
+        cb->conn->target_host,
+        blacklist[i]);
+      return;
+    }
+  }
+
   if (submit_hostname_lookup(epoll_fd, cb, conn->target_host, conn->target_port) < 0) {
     fail_connecting_cb(epoll_fd, cb);
     return;

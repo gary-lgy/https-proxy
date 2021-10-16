@@ -42,6 +42,8 @@ struct event_loop_args {
   unsigned short thread_id;
   bool telemetry_enabled;
   int listening_socket;
+  char** blacklist;
+  int blacklist_len;
 };
 
 void handle_connections_in_event_loop(struct event_loop_args* args) {
@@ -81,7 +83,7 @@ void handle_connections_in_event_loop(struct event_loop_args* args) {
           DEBUG_LOG("listening socket is not readable but epoll woke us up anyway");
           continue;
         }
-        accept_incoming_connections(epoll_fd, args->listening_socket, args->telemetry_enabled);
+        accept_incoming_connections(epoll_fd, args->listening_socket, args->telemetry_enabled, args->blacklist, args->blacklist_len);
       } else {
         // events on existing connection
         struct epoll_cb* cb = events[i].data.ptr;
@@ -130,8 +132,22 @@ int main(int argc, char** argv) {
     die(hsprintf("expected flag_telemetry to be either 0 or 1, got '%s'", argv[2]));
   }
 
-  // TODO: blacklist
   const char* blacklist_path = argv[3];
+  char** blacklist = calloc(100, sizeof(char *));
+  FILE *fp;
+  fp = fopen(blacklist_path, "r");
+  if (fp == NULL) {
+    die(hsprintf("could not open file: '%s'", argv[3]));
+  }
+  int i = 0;
+  size_t len;
+  ssize_t nread;
+  while ((nread = getline(&blacklist[i], &len, fp)) != -1) {
+    DEBUG_LOG("Read blacklist entry %d: %s", i, blacklist[i]);
+    i++;
+  }
+  int blacklist_len = i;
+  fclose(fp);
 
   unsigned short max_threads = DEFAULT_MAX_THREADS;
   if (argc == 5) {
@@ -152,11 +168,12 @@ int main(int argc, char** argv) {
   }
   unsigned short connection_threads = max_threads - asyncaddrinfo_threads;
 
-  printf("- listening port:                         %hu\n", listening_port);
-  printf("- telemetry enabled:                      %s\n", telemetry_enabled ? "yes" : "no");
-  printf("- path to blacklist file:                 %s\n", blacklist_path);
-  printf("- number of connection threads:           %hu\n", connection_threads);
-  printf("- number of async addrinfo (DNS) threads: %hu\n", asyncaddrinfo_threads);
+  printf("- listening port:                          %hu\n", listening_port);
+  printf("- telemetry enabled:                       %s\n", telemetry_enabled ? "yes" : "no");
+  printf("- path to blacklist file:                  %s\n", blacklist_path);
+  printf("- number of entries in the blacklist file: %d\n", blacklist_len);
+  printf("- number of connection threads:            %hu\n", connection_threads);
+  printf("- number of async addrinfo (DNS) threads:  %hu\n", asyncaddrinfo_threads);
 
   int listening_socket = create_bind_listen(listening_port);
 
@@ -166,6 +183,8 @@ int main(int argc, char** argv) {
       .listening_socket = listening_socket,
       .telemetry_enabled = telemetry_enabled,
       .thread_id = i,
+      .blacklist = blacklist,
+      .blacklist_len = blacklist_len,
     };
 
     args_list[i] = args;

@@ -5,7 +5,7 @@
 #include <time.h>
 #include <unistd.h>
 
-struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled) {
+struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist, int blacklist_len) {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_socket = -1;
@@ -37,11 +37,15 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled) {
     timespec_get(&conn->started_at, TIME_UTC);
   }
 
+  conn->blacklist = blacklist;
+  conn->blacklist_len = blacklist_len;
+  conn->is_blocked = false;
+
   return conn;
 }
 
 void destroy_tunnel_conn(struct tunnel_conn* conn) {
-  if (conn->telemetry_enabled && conn->target_host[0] != '\0') {
+  if (conn->telemetry_enabled && conn->target_host[0] != '\0' && !conn->is_blocked) {
     struct timespec ended_at;
     timespec_get(&ended_at, TIME_UTC);
     unsigned int milliseconds_elapsed =

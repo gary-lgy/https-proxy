@@ -10,7 +10,7 @@
 #include "../util.h"
 #include "epoll_cb.h"
 
-void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled) {
+void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled, char** blacklist, int blacklist_len) {
   while (1) {
     struct sockaddr_in client_addr;
     socklen_t addrlen = sizeof(struct sockaddr_in);
@@ -29,7 +29,7 @@ void accept_incoming_connections(int epoll_fd, int listening_socket, bool teleme
       }
     }
 
-    struct tunnel_conn* conn = create_tunnel_conn(telemetry_enabled);
+    struct tunnel_conn* conn = create_tunnel_conn(telemetry_enabled, blacklist, blacklist_len);
     conn->client_socket = client_socket;
     set_client_hostport(conn, &client_addr);
 
