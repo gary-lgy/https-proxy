@@ -18,7 +18,7 @@ void accept_incoming_connections(int epoll_fd, int listening_socket, bool teleme
     int client_socket = accept4(listening_socket, (struct sockaddr*)&client_addr, &addrlen, SOCK_NONBLOCK);
     if (client_socket < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        // processed all incoming connections
+        // finished processing all incoming connections
         return;
       } else {
         // unexpected error in accepting the connection
@@ -47,56 +47,69 @@ void accept_incoming_connections(int epoll_fd, int listening_socket, bool teleme
       char* error_desc = errno2s(errno);
       DEBUG_LOG("failed to add accepted client socket from %s into epoll: %s", conn->client_hostport, error_desc);
       free(error_desc);
+
       destroy_tunnel_conn(conn);
       free(cb);
     }
   }
 }
 
+/**
+ * @param read_fd
+ * @param buf
+ * @return the number of bytes read on success; 
+ * -1 when reading error is encountered;
+ * -2 if the buffer is full. 
+ */
 ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
-  buf->empty[0] = '\0';
+  // We always want the contents in the buffer to be null terminated, even if no data is read
+  buf->write_ptr[0] = '\0';
 
-  size_t remaining_capacity = BUFFER_SIZE - 1 - (buf->empty - buf->start);
+  // Leave one byte for null terminator
+  size_t remaining_capacity = BUFFER_SIZE - 1 - (buf->write_ptr - buf->start);
   if (remaining_capacity <= 0) {
     return -2;
   }
 
-  ssize_t n_bytes_read = read(read_fd, buf->empty, remaining_capacity);
+  ssize_t n_bytes_read = read(read_fd, buf->write_ptr, remaining_capacity);
 
   if (n_bytes_read <= 0) {
     return n_bytes_read;
   }
 
-  buf->empty += n_bytes_read;
-  buf->empty[0] = '\0';
+  buf->write_ptr += n_bytes_read;
+  buf->write_ptr[0] = '\0';
   return n_bytes_read;
 }
 
 /**
  * @param conn
- * @return -1 if an error occurred and conn should be closed; 0 if CONNECT was found and parsed; 1 if we need more
- * bytes.
+ * @return -1 if an error occurred and conn should be closed; 
+ * 0 if CONNECT was found and parsed; 
+ * 1 if we need more bytes.
  */
 int find_and_parse_http_connect(struct tunnel_conn* conn) {
   struct tunnel_buffer* buf = &conn->client_to_target_buffer;
   ssize_t n_bytes_read = read_into_buffer(conn->client_socket, buf);
 
-  if (n_bytes_read == 0) {
-    DEBUG_LOG(
-        "client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
-        conn->client_hostport,
-        buf->empty - buf->start,
-        buf->start);
-    return -1;
-  } else if (n_bytes_read < 0) {
+  if (n_bytes_read < 0) {
     char* errno_desc = errno2s(errno);
     DEBUG_LOG(
         "reading for CONNECT from %s failed: %s, received %d bytes: %s",
         conn->client_hostport,
         errno_desc,
-        buf->empty - buf->start,
+        buf->write_ptr - buf->start,
         buf->start);
     free(errno_desc);
+    return -1;
+  }
+
+  if (n_bytes_read == 0) {
+    DEBUG_LOG(
+        "client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
+        conn->client_hostport,
+        buf->write_ptr - buf->start,
+        buf->start);
     return -1;
   }
 
@@ -116,7 +129,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
 
     set_target_hostport(conn);
 
-    buf->consumable = double_crlf + 4;  // skip over the double crlf
+    buf->read_ptr = double_crlf + 4;  // skip over the double crlf
 
     DEBUG_LOG("received CONNECT request: %s %s:%s", conn->http_version, conn->target_host, conn->target_port);
 
@@ -125,7 +138,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
 
   // we don't have an HTTP message yet, can we read more bytes?
 
-  if (buf->empty >= buf->start + BUFFER_SIZE - 1) {
+  if (buf->write_ptr >= buf->start + BUFFER_SIZE - 1) {
     // no, the buffer is full
     DEBUG_LOG("no CONNECT message from %s until buffer is full, buffer content: %s", conn->client_hostport, buf->start);
     return -1;
@@ -140,9 +153,8 @@ void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t eve
 
   if (events & EPOLLERR) {
     DEBUG_LOG(
-        "epoll reported error on tunnel connection (%s) -> (%s) in accepted state",
-        conn->client_hostport,
-        conn->target_hostport);
+        "epoll reported error on tunnel connection (%s) -> (?) in accepted state",
+        conn->client_hostport);
   }
 
   int result = find_and_parse_http_connect(conn);

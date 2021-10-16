@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE (1024 * 8)
 
 #define MAX_HOST_LEN 512
 #define MAX_PORT_LEN 6
@@ -14,25 +14,25 @@
 
 /**
  * The buffer layout looks like this:
- * The first section is data that has already been consumed.
- * The second section is data that is yet to be consumed.
- * The third section is available space.
+ * The first section is data that has already been written and read.
+ * The second section is data that is written but yet to be read from the buffer.
+ * The third section is available space for writing into the buffer.
  * |-------------------| <--- start
- * | already consumed  |
- * |-------------------| <--- consumable
- * |  can be consumed  |
- * |-------------------| <--- empty
- * |      empty        |
+ * |     used data     |
+ * |-------------------| <--- read_ptr
+ * |    can be read    |
+ * |-------------------| <--- write_ptr
+ * |   can be written  |
  * |-------------------|
  *
- * When writing into the buffer, producers should write from the start of the empty section.
- * When consuming from the buffer, consumers should consume from the second section.
- * The boundaries should be adjusted accordingly after consumption / production.
+ * When writing into the buffer, producers should write from the start of `write_ptr`.
+ * When reading from the buffer, consumers should read from the start if `read_ptr`.
+ * The boundaries should be adjusted accordingly after reading / writing.
  */
 struct tunnel_buffer {
   char* start;
-  char* consumable;
-  char* empty;
+  char* read_ptr;
+  char* write_ptr;
 };
 
 struct tunnel_conn {
@@ -58,6 +58,7 @@ struct tunnel_conn {
   // how many directions of this connection have been closed (0, 1, or 2)
   int halves_closed;
 
+  // telemetry
   bool telemetry_enabled;
   struct timespec started_at;
   unsigned long long n_bytes_streamed;

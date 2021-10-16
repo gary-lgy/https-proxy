@@ -21,13 +21,13 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled) {
 
   char* buffer = malloc(BUFFER_SIZE * sizeof(char));
   conn->client_to_target_buffer.start = buffer;
-  conn->client_to_target_buffer.consumable = buffer;
-  conn->client_to_target_buffer.empty = buffer;
+  conn->client_to_target_buffer.read_ptr = buffer;
+  conn->client_to_target_buffer.write_ptr = buffer;
 
   buffer = malloc(BUFFER_SIZE * sizeof(char));
   conn->target_to_client_buffer.start = buffer;
-  conn->target_to_client_buffer.consumable = buffer;
-  conn->target_to_client_buffer.empty = buffer;
+  conn->target_to_client_buffer.read_ptr = buffer;
+  conn->target_to_client_buffer.write_ptr = buffer;
 
   conn->halves_closed = 0;
   conn->n_bytes_streamed = 0;

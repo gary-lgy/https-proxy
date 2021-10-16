@@ -52,8 +52,11 @@ void handle_connections_in_event_loop(struct event_loop_args* args) {
 
   struct epoll_event event, events[EPOLL_MAX_EVENTS];
 
-  // NULL means we have events on listening socket
+  // Configure `event.data.ptr` to be NULL when there are events on listening socket
   event.data.ptr = NULL;
+  // Since we will call `accept4` until there are no more incoming connections,
+  // and edge-triggered is more efficient than level-triggered,
+  // we can register edge-triggered notification for read events on the listening socket
   event.events = EPOLLIN | EPOLLET;
   if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, args->listening_socket, &event) < 0) {
     die(hsprintf("failed to add listening socket %d into epoll: %s", args->listening_socket, errno2s(errno)));
@@ -100,15 +103,14 @@ void handle_connections_in_event_loop(struct event_loop_args* args) {
 
 void* handle_connections_in_event_loop_pthread_wrapper(void* raw_args) {
   struct event_loop_args* args = raw_args;
-  thread_id__ = args->thread_id;
+  thread_id__ = args->thread_id; // for logging purpose
   handle_connections_in_event_loop(args);
-  free(args);
   return NULL;
 }
 
 int main(int argc, char** argv) {
   if (argc < 4 || argc > 5) {
-    die(hsprintf("Usage: %s <port> <flag_telemetry> <filename of blacklist> [max threads]", argv[0]));
+    die(hsprintf("Usage: %s <port> <flag_telemetry> <path to blacklist file> [max threads]", argv[0]));
   }
 
   char* endptr;
@@ -125,11 +127,11 @@ int main(int argc, char** argv) {
   } else if (strcmp(argv[2], "1") == 0) {
     telemetry_enabled = true;
   } else {
-    die(hsprintf("expected flag_telemetry to be either 0 or 1, got %s", argv[2]));
+    die(hsprintf("expected flag_telemetry to be either 0 or 1, got '%s'", argv[2]));
   }
 
   // TODO: blacklist
-  const char* blacklist_filename = argv[3];
+  const char* blacklist_path = argv[3];
 
   unsigned short max_threads = DEFAULT_MAX_THREADS;
   if (argc == 5) {
@@ -142,7 +144,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // use a quarter of the threads for async getaddrinfo
+  // use a quarter of the threads (or minimally 1) for async getaddrinfo
   // use the rest (including the main thread) to run event loops and handle connections
   unsigned short asyncaddrinfo_threads = max_threads / 4;
   if (asyncaddrinfo_threads < 1) {
@@ -152,39 +154,51 @@ int main(int argc, char** argv) {
 
   printf("- listening port:                         %hu\n", listening_port);
   printf("- telemetry enabled:                      %s\n", telemetry_enabled ? "yes" : "no");
-  printf("- blacklist filename:                     %s\n", blacklist_filename);
+  printf("- path to blacklist file:                 %s\n", blacklist_path);
   printf("- number of connection threads:           %hu\n", connection_threads);
   printf("- number of async addrinfo (DNS) threads: %hu\n", asyncaddrinfo_threads);
 
   int listening_socket = create_bind_listen(listening_port);
 
+  struct event_loop_args args_list[connection_threads];
+  for (int i = 0; i < connection_threads; i++) {
+    struct event_loop_args args = {
+      .listening_socket = listening_socket,
+      .telemetry_enabled = telemetry_enabled,
+      .thread_id = i,
+    };
+
+    args_list[i] = args;
+  }
+
   pthread_t workers[connection_threads - 1];
+  int s;
   for (int i = 0; i < connection_threads - 1; i++) {
-    struct event_loop_args* args = malloc(sizeof(struct event_loop_args));
-    args->listening_socket = listening_socket;
-    args->telemetry_enabled = telemetry_enabled;
-    args->thread_id = i + 1;
-    pthread_create(&workers[i], NULL, handle_connections_in_event_loop_pthread_wrapper, args);
+    s = pthread_create(&workers[i], NULL, handle_connections_in_event_loop_pthread_wrapper, &args_list[i + 1]);
+    if (s != 0) {
+      die(hsprintf("error creating thread %d, error=%d", i + 1, s));
+    }
   }
 
   asyncaddrinfo_init(asyncaddrinfo_threads);
 
   printf("Accepting requests\n");
   // run another event loop on the main thread
-  struct event_loop_args args = {
-      .listening_socket = listening_socket,
-      .telemetry_enabled = telemetry_enabled,
-      .thread_id = 0,
-  };
-  handle_connections_in_event_loop_pthread_wrapper(&args);
+  handle_connections_in_event_loop_pthread_wrapper(&args_list[0]);
+
+  // We will never reach here, the cleanup code below is just for completeness' sake
 
   if (close(listening_socket) < 0) {
     die(hsprintf("failed to close listening socket: %s", errno2s(errno)));
   }
 
   for (int i = 0; i < connection_threads; i++) {
-    pthread_join(workers[i], NULL);
+    s = pthread_join(workers[i], NULL);
+    if (s != 0) {
+      die(hsprintf("error joining thread %d, error=%d", i + 1, s));
+    }
   }
+
   asyncaddrinfo_cleanup();
 
   return 0;

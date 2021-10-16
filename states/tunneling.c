@@ -23,33 +23,11 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   int target_read_fd = conn->target_socket;
   int target_write_fd = conn->target_socket_dup = dup(target_read_fd);
 
-  // During tunneling, we will switch to epoll_wait on all these FDs.
-  // If the FD has already been added, EPOLL_CTL_ADD will not work; only EPOLL_CTL_MOD can reactivate the FD.
-  // On the other hand, EPOLL_CTL_MOD will only work for FDs that have not been added.
-  // However, we have no idea which FDs are in the epoll instance already.
-  // For convenience, we make sure all FDs have been added to the epoll instance.
-  // Hence, we can use EPOLL_CTL_MOD later when we want to wait on the socket again.
-  struct epoll_event event;
-  event.events = EPOLLERR | EPOLLONESHOT;
-  event.data.ptr = NULL;
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, target_write_fd, &event)) {
-    char* error_desc = errno2s(errno);
-    DEBUG_LOG(
-        "failed to add target_write_fd %d for (%s) -> (%s) into epoll: %s",
-        target_write_fd,
-        conn->client_hostport,
-        conn->target_hostport,
-        error_desc);
-    free(error_desc);
-    destroy_tunnel_conn(conn);
-    return;
-  }
-
   // TODO: free memory / close dup when cleaning up after error
   // Send HTTP 200 to client
   int n_bytes =
       sprintf(conn->target_to_client_buffer.start, "%s 200 Connection Established \r\n\r\n", conn->http_version);
-  conn->target_to_client_buffer.empty += n_bytes;
+  conn->target_to_client_buffer.write_ptr += n_bytes;
 
   struct epoll_tunneling_cb* cb = malloc(sizeof(struct epoll_tunneling_cb));
   cb->type = cb_type_tunneling;
@@ -57,6 +35,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   cb->is_client_to_target = false;
   cb->is_read = false;
 
+  struct epoll_event event;
   event.events = EPOLLOUT | EPOLLONESHOT;
   event.data.ptr = cb;
   if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_write_fd, &event) < 0) {
@@ -73,7 +52,33 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     return;
   }
 
-  size_t n_bytes_remaining = conn->client_to_target_buffer.empty - conn->client_to_target_buffer.consumable;
+  // During tunneling, we will switch to epoll_wait on all these FDs.
+  // If the FD has already been added, EPOLL_CTL_ADD will not work; only EPOLL_CTL_MOD can reactivate the FD.
+  // On the other hand, EPOLL_CTL_MOD will only work for FDs that have not been added.
+  // However, we have no idea which FDs are in the epoll instance already.
+  // For convenience, we make sure all FDs have been added to the epoll instance.
+  // Hence, we can use EPOLL_CTL_MOD later when we want to wait on the socket again.
+  
+  // Add target_write_fb to epoll since it is never added before
+  // The other 3 have already been added
+  event.events = EPOLLERR | EPOLLONESHOT;
+  event.data.ptr = NULL;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, target_write_fd, &event) < 0) {
+    char* error_desc = errno2s(errno);
+    DEBUG_LOG(
+        "failed to add target_write_fd %d for (%s) -> (%s) into epoll: %s",
+        target_write_fd,
+        conn->client_hostport,
+        conn->target_hostport,
+        error_desc);
+    free(error_desc);
+
+    destroy_tunnel_conn(conn);
+    return;
+  }
+
+
+  size_t n_bytes_remaining = conn->client_to_target_buffer.write_ptr - conn->client_to_target_buffer.read_ptr;
   cb = malloc(sizeof(struct epoll_tunneling_cb));
   if (n_bytes_remaining > 0) {
     // if we received more than just the CONNECT message from the client, send the rest of the bytes to the target
@@ -102,8 +107,8 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     // wait to read from client
 
     // reset the buffer
-    conn->client_to_target_buffer.consumable = conn->client_to_target_buffer.start;
-    conn->client_to_target_buffer.empty = conn->client_to_target_buffer.start;
+    conn->client_to_target_buffer.read_ptr = conn->client_to_target_buffer.start;
+    conn->client_to_target_buffer.write_ptr = conn->client_to_target_buffer.start;
 
     cb = malloc(sizeof(struct epoll_tunneling_cb));
     cb->type = cb_type_tunneling;
@@ -137,7 +142,7 @@ void handle_tunneling_read(
     struct tunnel_buffer* buf,
     int polled_fd,
     int opposite_fd) {
-  size_t remaining_capacity = BUFFER_SIZE - (buf->empty - buf->start);
+  size_t remaining_capacity = BUFFER_SIZE - (buf->write_ptr - buf->start);
   if (remaining_capacity <= 0) {
     die(hsprintf(
         "going to read for tunnel (%s) -> (%s), but the buf is full; this should not happen",
@@ -145,7 +150,7 @@ void handle_tunneling_read(
         dest_hostport));
   }
 
-  ssize_t n_bytes_read = read(polled_fd, buf->empty, remaining_capacity);
+  ssize_t n_bytes_read = read(polled_fd, buf->write_ptr, remaining_capacity);
 
   if (n_bytes_read == 0) {
     // peer stopped sending
@@ -164,6 +169,7 @@ void handle_tunneling_read(
     char* error_desc = errno2s(errno);
     DEBUG_LOG("read error from (%s) -> (%s): %s", source_hostport, dest_hostport, error_desc);
     free(error_desc);
+
     destroy_tunnel_conn(cb->conn);
     free(cb);
     return;
@@ -174,7 +180,7 @@ void handle_tunneling_read(
     cb->conn->n_bytes_streamed += n_bytes_read;
   }
 
-  buf->empty += n_bytes_read;
+  buf->write_ptr += n_bytes_read;
 
   cb->is_read = false;
 
@@ -200,7 +206,7 @@ void handle_tunneling_write(
     struct tunnel_buffer* buf,
     int polled_fd,
     int opposite_fd) {
-  size_t n_bytes_to_send = buf->empty - buf->consumable;
+  size_t n_bytes_to_send = buf->write_ptr - buf->read_ptr;
 
   if (n_bytes_to_send <= 0) {
     die(hsprintf(
@@ -209,7 +215,7 @@ void handle_tunneling_write(
         dest_hostport));
   }
 
-  ssize_t n_bytes_sent = send(polled_fd, buf->consumable, n_bytes_to_send, MSG_NOSIGNAL);
+  ssize_t n_bytes_sent = send(polled_fd, buf->read_ptr, n_bytes_to_send, MSG_NOSIGNAL);
 
   if (n_bytes_sent < 0) {
     // peer refused to receive?
@@ -225,12 +231,12 @@ void handle_tunneling_write(
 
   DEBUG_LOG("wrote %zu bytes (%s) -> (%s)", n_bytes_sent, source_hostport, dest_hostport);
 
-  buf->consumable += n_bytes_sent;
+  buf->read_ptr += n_bytes_sent;
 
   struct epoll_event event;
-  if (buf->consumable >= buf->empty) {
+  if (buf->read_ptr >= buf->write_ptr) {
     // sent everything, we can read again
-    buf->consumable = buf->empty = buf->start;
+    buf->read_ptr = buf->write_ptr = buf->start;
 
     cb->is_read = true;
     event.events = EPOLLIN | EPOLLONESHOT;

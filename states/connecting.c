@@ -15,8 +15,10 @@
 
 void fail_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   cb->failed = true;
+
+  // Send HTTP 4xx to client
   int n_bytes = sprintf(cb->conn->target_to_client_buffer.start, "%s 400 Bad Request \r\n\r\n", cb->conn->http_version);
-  cb->conn->target_to_client_buffer.empty += n_bytes;
+  cb->conn->target_to_client_buffer.write_ptr += n_bytes;
 
   struct epoll_event event;
   event.events = EPOLLOUT | EPOLLONESHOT;
@@ -24,7 +26,7 @@ void fail_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->conn->client_socket, &event) < 0) {
     char* error_desc = errno2s(errno);
     DEBUG_LOG(
-        "failed to add client_socket of %s to epoll for writing 400 response: %s",
+        "failed to add client_socket of %s to epoll for writing 4xx response: %s",
         cb->conn->client_hostport,
         error_desc);
     free(error_desc);
@@ -115,22 +117,22 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
 
 void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   struct tunnel_buffer* buf = &cb->conn->target_to_client_buffer;
-  size_t n_bytes_to_send = buf->empty - buf->consumable;
+  size_t n_bytes_to_send = buf->write_ptr - buf->read_ptr;
 
   if (n_bytes_to_send <= 0) {
     die(hsprintf(
-        "going to send 400 response for tunnel (%s) -> (%s), but the buf is empty; this should not happen",
+        "going to send 4xx response for tunnel (%s) -> (%s), but the buf is empty; this should not happen",
         cb->conn->client_hostport,
         cb->conn->target_hostport));
   }
 
-  ssize_t n_bytes_sent = send(cb->conn->client_socket, buf->consumable, n_bytes_to_send, MSG_NOSIGNAL);
+  ssize_t n_bytes_sent = send(cb->conn->client_socket, buf->read_ptr, n_bytes_to_send, MSG_NOSIGNAL);
 
   if (n_bytes_sent < 0) {
     // teardown the entire connection
     char* error_desc = errno2s(errno);
     DEBUG_LOG(
-        "failed to write 400 response for (%s) -> (%s): %s",
+        "failed to write 4xx response for (%s) -> (%s): %s",
         cb->conn->client_hostport,
         cb->conn->target_hostport,
         error_desc);
@@ -142,14 +144,14 @@ void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   }
 
   DEBUG_LOG(
-      "sent %d bytes of 400 response to client of (%s) -> (%s)",
+      "sent %d bytes of 4xx response to client of (%s) -> (%s)",
       n_bytes_sent,
       cb->conn->client_hostport,
       cb->conn->target_hostport);
 
-  buf->consumable += n_bytes_sent;
+  buf->read_ptr += n_bytes_sent;
 
-  if (buf->consumable >= buf->empty) {
+  if (buf->read_ptr >= buf->write_ptr) {
     // all bytes sent
     destroy_tunnel_conn(cb->conn);
     free(cb);
@@ -163,7 +165,7 @@ void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->conn->client_socket, &event) < 0) {
     char* error_desc = errno2s(errno);
     DEBUG_LOG(
-        "failed to add client_socket of %s to epoll for writing 400 response: %s",
+        "failed to add client_socket of %s to epoll for writing 4xx response: %s",
         cb->conn->client_hostport,
         error_desc);
     free(error_desc);
@@ -181,13 +183,13 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
         cb->conn->target_hostport);
   }
 
-  // after connection failure, we send 400 response to client
+  // after connection failure, we send 4xx response to client
   if (cb->failed) {
     handle_failed_connecting_cb(epoll_fd, cb);
     return;
   }
 
-  // we're either waiting for connection to target to complete or asyncaddrinfo lookup result
+  // we're either waiting for asyncaddrinfo lookup result or connection to target to complete
   // for the former, we are waiting for EPOLLIN, and for the latter, we are waiting for EPOLLOUT
   if (events & EPOLLIN) {
     // asyncaddrinfo result came back
