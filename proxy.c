@@ -143,6 +143,11 @@ int main(int argc, char** argv) {
   size_t len;
   ssize_t nread;
   while ((nread = getline(&blacklist[i], &len, fp)) != -1) {
+    size_t len = strcspn(blacklist[i], "\r\n");
+    if (len == 0) {
+      continue;
+    }
+    blacklist[i][len] = '\0';
     DEBUG_LOG("Read blacklist entry %d: %s", i, blacklist[i]);
     i++;
   }
