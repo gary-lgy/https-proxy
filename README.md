@@ -1,7 +1,9 @@
 # Transparent HTTPS Proxy
 
 ## Setup
+
 1. Compile the source code
+
 ```
 make build
 ```
@@ -9,18 +11,22 @@ make build
 The executable will be in `./out` directory.
 
 2. Start the proxy
+
 ```
 ./out/proxy <port> <flag_telemetry> <path to blacklist file> [max threads]
 ```
-For example, to start the proxy with the following configurations, 
-- listening on port 3000 
+
+For example, to start the proxy with the following configurations,
+
+- listening on port 3000
 - with telemetry enabled
 - a blacklist file with name 'blacklist.txt' in `./out` directory
-- a maximum number of 8 threads are used  
+- a maximum number of 8 threads are used
 
-run `./out/proxy 3000 1 out/blacklist.txt 8` 
+run `./out/proxy 3000 1 out/blacklist.txt 8`
 
-Note: The default maximum number of threads is 8 if `max threads` is not specified. The maximum number of threads should be at least 2.
+Note: The default maximum number of threads is 8 if `max threads` is not specified. The maximum number of threads should
+be at least 2.
 
 3. Connect to SoC VPN
 
@@ -32,10 +38,14 @@ Note: The default maximum number of threads is 8 if `max threads` is not specifi
 
 ![](./docs/state-transition-diagram.svg)
 
-1. Of the maximum number of threads allowed for the program (by default 8), 1/4 of the threads (or minimally 1 thread) are allocated for **DNS resolution**. The remaining threads are **connection threads** which are responsible for accepting connections and handling the tunneling between client and server.
+1. Of the maximum number of threads allowed for the program (by default 8), 1/4 of the threads (or minimally 1 thread)
+   are allocated for **DNS resolution**. The remaining threads are **connection threads** which are responsible for
+   accepting connections and handling the tunneling between client and server.
 
-2. Open a host TCP socket listening at the designated port and wait for incoming connections.
-Each connection thread has a `epoll` instance and the listening socket is added to each instance. When incoming connections arrive, all the connection threads will be woken up to accept the connection, but each connection will only be accepted on a single thread. That thread will be responsible for the lifetime of the connection. No additional synchronisation is needed. 
+2. Open a host TCP socket listening at the designated port and wait for incoming connections. Each connection thread has
+   a `epoll` instance and the listening socket is added to each instance. When incoming connections arrive, all the
+   connection threads will be woken up to accept the connection, but each connection will only be accepted on a single
+   thread. That thread will be responsible for the lifetime of the connection. No additional synchronisation is needed.
 
 ```c
 // `handle_connections_in_event_loop`
@@ -50,7 +60,8 @@ event.events = EPOLLIN | EPOLLET;
 epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listening_socket, &event) 
 ```  
 
-3. Once an incoming connections is accepted, add the client socket to the handling thread's `epoll` instance and wait for the HTTP CONNECT message from the client socket. 
+3. Once an incoming connections is accepted, add the client socket to the handling thread's `epoll` instance and wait
+   for the HTTP CONNECT message from the client socket.
 
 ```c
 // `accept_incoming_connections`
@@ -65,9 +76,10 @@ event.data.ptr = cb;
 epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event)
 ```
 
-3. When the client socket is available for reading, parse the HTTP CONNECT message. 
-- If the message is incomplete, read the existing fragment into the buffer and continue waiting for more data to be read from the client socket by registering read event of the client socket
-into the `epoll` instance.
+3. When the client socket is available for reading, parse the HTTP CONNECT message.
+
+- If the message is incomplete, read the existing fragment into the buffer and continue waiting for more data to be read
+  from the client socket by registering read event of the client socket into the `epoll` instance.
 
 ```c
 // `handle_accepted_cb`
@@ -79,6 +91,7 @@ epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event)
 ```
 
 - If the message is well formed and complete, start hostname lookup at the DNS thread.
+
 ```c
 struct epoll_connecting_cb* cb = malloc(sizeof(struct epoll_connecting_cb));
 cb->type = cb_type_connecting;
@@ -92,9 +105,10 @@ event.data.ptr = cb;
 epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->asyncaddrinfo_fd, &event)
 ```
 
-- If the message is malformed, close the connection. 
+- If the message is malformed, close the connection.
 
-4. When the asyncaddrinfo lookup result is available, initialize target socket and connect to the target. 
+4. When the asyncaddrinfo lookup result is available, initialize target socket and connect to the target.
+
 ```c
 struct epoll_event event;
 event.events = EPOLLOUT | EPOLLONESHOT;
@@ -108,6 +122,7 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
 5. When the connection is completed, send HTTP 200 to client and start the tunnelling.
 
 - Send HTTP 200 to client
+
 ```c
 - epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_write_fd, &event)  
     -> EPOLLOUT | EPOLLONESHOT  
@@ -119,6 +134,7 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
 ```
 
 - If there is more to write to target, wait for target socket to become available for writing
+
 ```c
 - epoll_ctl(epoll_fd, EPOLL_CTL_MOD, target_write_fd, &event) 
     -> EPOLLOUT | EPOLLONESHOT  
@@ -128,8 +144,9 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
         -> cb->is_to_target = true;  
         -> cb->is_read = false; 
 ``` 
-    
+
 - If there is nothing left to write to target, wait for client socket to become available for reading
+
 ```c
 - epoll_ctl(epoll_fd, EPOLL_CTL_MOD, client_read_fd, &event)  
     -> EPOLLIN | EPOLLONESHOT  
@@ -140,23 +157,24 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
         -> cb->is_read = true;  
 ``` 
 
-6. Once the tunnelling is setup, the following four events forms the event loop and our proxy serves as the relay agent to relay requests/response between client and server.
+6. Once the tunnelling is setup, the following four events forms the event loop and our proxy serves as the relay agent
+   to relay requests/response between client and server.
 
-- Client socket becomes available to read (i.e. client sends a request to server), 
-read the data from the client socket into the client_to_target buffer, wait 
-for the target socket to become available for writing so we can send the request to the server.
+- Client socket becomes available to read (i.e. client sends a request to server), read the data from the client socket
+  into the client_to_target buffer, wait for the target socket to become available for writing so we can send the
+  request to the server.
 
-- Target socket becomes available to write (i.e. we can now relay the request from client to server), write the data in client_to_target buffer to the target socket, wait for the target
-socket to become available for reading so we can read the response from the server.
+- Target socket becomes available to write (i.e. we can now relay the request from client to server), write the data in
+  client_to_target buffer to the target socket, wait for the target socket to become available for reading so we can
+  read the response from the server.
 
-- Target socket becomes available to read (i.e. server replies to client),
-read the data from the target socket into the target_to_client buffer, wait 
-for the client socket to become available for writing so we can send the response to the client.
+- Target socket becomes available to read (i.e. server replies to client), read the data from the target socket into the
+  target_to_client buffer, wait for the client socket to become available for writing so we can send the response to the
+  client.
 
-- Client socket becomes available to write (i.e. we can now relay data from server to client),
-write the data in target_to_client buffer to the client socket, now wait for the client
-socket to become available for reading again (i.e. wait for next request)
-
+- Client socket becomes available to write (i.e. we can now relay data from server to client), write the data in
+  target_to_client buffer to the client socket, now wait for the client socket to become available for reading again (
+  i.e. wait for next request)
 
 <!-- ```
 struct tunnel_conn {
@@ -190,13 +208,21 @@ struct tunnel_conn {
 ``` -->
 
 ## Why `epoll`?
+
 TODO: what's wrong with one connection per thread? (blocking)
 
-`epoll` is a Linux kernal system call for a scalable I/O event notification mechanism. It monitors multiple file descriptors to see whether I/O is possible on any of them. It is meant to replace the older POSIX `select` and `poll` system calls, to achieve better performance in more demanding applications, where the number of watched file descriptors is large. 
+`epoll` is a Linux kernal system call for a scalable I/O event notification mechanism. It monitors multiple file
+descriptors to see whether I/O is possible on any of them. It is meant to replace the older POSIX `select` and `poll`
+system calls, to achieve better performance in more demanding applications, where the number of watched file descriptors
+is large.
 
-`select` can monitor up to FD_SETSIZE number of descriptors at a time, typically a small number determined at libc's compile time.  
-`poll` doesn't have a fixed limit of descriptors it can monitor at a time, but apart from other things, even we have to perform a linear scan of all the passed descriptors every time to check readiness notification, which is O(n) and slow.  
-`epoll` has no such fixed limits, and does not perform any linear scans. Hence it is able to perform better and handle a larger number of events.
+`select` can monitor up to FD_SETSIZE number of descriptors at a time, typically a small number determined at libc's
+compile time.  
+`poll` doesn't have a fixed limit of descriptors it can monitor at a time, but apart from other things, even we have to
+perform a linear scan of all the passed descriptors every time to check readiness notification, which is O(n) and
+slow.  
+`epoll` has no such fixed limits, and does not perform any linear scans. Hence it is able to perform better and handle a
+larger number of events.
 
 <!-- ### APIs
 - `epoll_create1(int flags)`  
