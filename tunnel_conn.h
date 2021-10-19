@@ -48,8 +48,15 @@ struct tunnel_buffer {
   char* write_ptr;
 };
 
+/**
+ * Represents a tunneling connection.
+ * There are two directions to this connection: client to target and target to client.
+ * Each direction has its own buffer and sets of socket file descriptors.
+ */
 struct tunnel_conn {
   // file descriptors
+  // Before we start tunneling, only client_socket and target_socket are used
+  // After we start tunneling, client_socket_dup is dup(client_socket) and target_socket_dup is dup(target_socket)
   int client_socket;
   int client_socket_dup;
   int target_socket;
