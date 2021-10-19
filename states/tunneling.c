@@ -24,9 +24,8 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   int target_write_fd = conn->target_socket_dup = dup(target_read_fd);
 
   // Send HTTP 200 to client
-  int n_bytes =
-      sprintf(conn->target_to_client_buffer.start, "%s 200 Connection Established \r\n\r\n", conn->http_version);
-  conn->target_to_client_buffer.write_ptr += n_bytes;
+  int n_bytes = sprintf(conn->to_client_buffer.start, "%s 200 Connection Established \r\n\r\n", conn->http_version);
+  conn->to_client_buffer.write_ptr += n_bytes;
 
   struct epoll_tunneling_cb* cb = malloc(sizeof(struct epoll_tunneling_cb));
   cb->type = cb_type_tunneling;
@@ -77,7 +76,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     return;
   }
 
-  size_t n_bytes_remaining = conn->client_to_target_buffer.write_ptr - conn->client_to_target_buffer.read_ptr;
+  size_t n_bytes_remaining = conn->to_target_buffer.write_ptr - conn->to_target_buffer.read_ptr;
   cb = malloc(sizeof(struct epoll_tunneling_cb));
   if (n_bytes_remaining > 0) {
     // if we received more than just the CONNECT message from the client, send the rest of the bytes to the target
@@ -106,8 +105,8 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     // wait to read from client
 
     // reset the buffer
-    conn->client_to_target_buffer.read_ptr = conn->client_to_target_buffer.start;
-    conn->client_to_target_buffer.write_ptr = conn->client_to_target_buffer.start;
+    conn->to_target_buffer.read_ptr = conn->to_target_buffer.start;
+    conn->to_target_buffer.write_ptr = conn->to_target_buffer.start;
 
     cb = malloc(sizeof(struct epoll_tunneling_cb));
     cb->type = cb_type_tunneling;
@@ -277,8 +276,7 @@ void handle_tunneling_write(
 void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t events) {
   const char* source_hostport = cb->is_to_target ? cb->conn->client_hostport : cb->conn->target_hostport;
   const char* dest_hostport = cb->is_to_target ? cb->conn->target_hostport : cb->conn->client_hostport;
-  struct tunnel_buffer* buf =
-      cb->is_to_target ? &cb->conn->client_to_target_buffer : &cb->conn->target_to_client_buffer;
+  struct tunnel_buffer* buf = cb->is_to_target ? &cb->conn->to_target_buffer : &cb->conn->to_client_buffer;
 
   int polled_fd, opposite_fd;
   if (cb->is_to_target) {

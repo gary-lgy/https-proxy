@@ -17,8 +17,8 @@ void fail_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   cb->failed = true;
 
   // Send HTTP 4xx to client
-  int n_bytes = sprintf(cb->conn->target_to_client_buffer.start, "%s 400 Bad Request \r\n\r\n", cb->conn->http_version);
-  cb->conn->target_to_client_buffer.write_ptr += n_bytes;
+  int n_bytes = sprintf(cb->conn->to_client_buffer.start, "%s 400 Bad Request \r\n\r\n", cb->conn->http_version);
+  cb->conn->to_client_buffer.write_ptr += n_bytes;
 
   struct epoll_event event;
   event.events = EPOLLOUT | EPOLLONESHOT;
@@ -128,7 +128,7 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
 }
 
 void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
-  struct tunnel_buffer* buf = &cb->conn->target_to_client_buffer;
+  struct tunnel_buffer* buf = &cb->conn->to_client_buffer;
   size_t n_bytes_to_send = buf->write_ptr - buf->read_ptr;
 
   if (n_bytes_to_send <= 0) {

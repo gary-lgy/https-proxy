@@ -71,9 +71,14 @@ struct tunnel_conn {
   char* target_port;
   char* http_version;
 
-  // buffers for tunneling
-  struct tunnel_buffer client_to_target_buffer;
-  struct tunnel_buffer target_to_client_buffer;
+  /**
+   * Buffer for data to be sent to the target.
+   */
+  struct tunnel_buffer to_target_buffer;
+  /**
+   * Buffer for data to be sent to the client.
+   */
+  struct tunnel_buffer to_client_buffer;
 
   // how many directions of this connection have been closed (0, 1, or 2)
   int halves_closed;

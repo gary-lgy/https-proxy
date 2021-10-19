@@ -10,7 +10,12 @@
 #include "../util.h"
 #include "epoll_cb.h"
 
-void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled, char** blacklist, int blacklist_len) {
+void accept_incoming_connections(
+    int epoll_fd,
+    int listening_socket,
+    bool telemetry_enabled,
+    char** blacklist,
+    int blacklist_len) {
   while (1) {
     struct sockaddr_in client_addr;
     socklen_t addrlen = sizeof(struct sockaddr_in);
@@ -57,9 +62,9 @@ void accept_incoming_connections(int epoll_fd, int listening_socket, bool teleme
 /**
  * @param read_fd
  * @param buf
- * @return the number of bytes read on success; 
+ * @return the number of bytes read on success;
  * -1 when reading error is encountered;
- * -2 if the buffer is full. 
+ * -2 if the buffer is full.
  */
 ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
   // We always want the contents in the buffer to be null terminated, even if no data is read
@@ -84,12 +89,12 @@ ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
 
 /**
  * @param conn
- * @return -1 if an error occurred and conn should be closed; 
- * 0 if CONNECT was found and parsed; 
+ * @return -1 if an error occurred and conn should be closed;
+ * 0 if CONNECT was found and parsed;
  * 1 if we need more bytes.
  */
 int find_and_parse_http_connect(struct tunnel_conn* conn) {
-  struct tunnel_buffer* buf = &conn->client_to_target_buffer;
+  struct tunnel_buffer* buf = &conn->to_target_buffer;
   ssize_t n_bytes_read = read_into_buffer(conn->client_socket, buf);
 
   if (n_bytes_read < 0) {
@@ -152,9 +157,7 @@ void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t eve
   struct tunnel_conn* conn = cb->conn;
 
   if (events & EPOLLERR) {
-    DEBUG_LOG(
-        "epoll reported error on tunnel connection (%s) -> (?) in accepted state",
-        conn->client_hostport);
+    DEBUG_LOG("epoll reported error on tunnel connection (%s) -> (?) in accepted state", conn->client_hostport);
   }
 
   int result = find_and_parse_http_connect(conn);

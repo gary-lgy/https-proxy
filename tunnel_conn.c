@@ -20,14 +20,14 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist,
   conn->target_hostport = calloc(HOST_PORT_BUF_SIZE, sizeof(char));
 
   char* buffer = malloc(BUFFER_SIZE * sizeof(char));
-  conn->client_to_target_buffer.start = buffer;
-  conn->client_to_target_buffer.read_ptr = buffer;
-  conn->client_to_target_buffer.write_ptr = buffer;
+  conn->to_target_buffer.start = buffer;
+  conn->to_target_buffer.read_ptr = buffer;
+  conn->to_target_buffer.write_ptr = buffer;
 
   buffer = malloc(BUFFER_SIZE * sizeof(char));
-  conn->target_to_client_buffer.start = buffer;
-  conn->target_to_client_buffer.read_ptr = buffer;
-  conn->target_to_client_buffer.write_ptr = buffer;
+  conn->to_client_buffer.start = buffer;
+  conn->to_client_buffer.read_ptr = buffer;
+  conn->to_client_buffer.write_ptr = buffer;
 
   conn->halves_closed = 0;
   conn->n_bytes_streamed = 0;
@@ -80,8 +80,8 @@ void destroy_tunnel_conn(struct tunnel_conn* conn) {
   free(conn->target_host);
   free(conn->target_port);
   free(conn->http_version);
-  free(conn->client_to_target_buffer.start);
-  free(conn->target_to_client_buffer.start);
+  free(conn->to_target_buffer.start);
+  free(conn->to_client_buffer.start);
 
   free(conn);
 }
