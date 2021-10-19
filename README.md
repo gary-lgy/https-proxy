@@ -114,7 +114,7 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
     -> event.data.ptr = cb  
         -> cb->type = cb_type_tunneling;  
         -> cb->conn = conn;  
-        -> cb->is_client_to_target = false;  
+        -> cb->is_to_target = false;  
         -> cb->is_read = false;  
 ```
 
@@ -125,7 +125,7 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
     -> event.data.ptr = cb  
         -> cb->type = cb_type_tunneling;  
         -> cb->conn = conn;  
-        -> cb->is_client_to_target = true;  
+        -> cb->is_to_target = true;  
         -> cb->is_read = false; 
 ``` 
     
@@ -136,7 +136,7 @@ epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)
     -> event.data.ptr = cb  
         -> cb->type = cb_type_tunneling;  
         -> cb->conn = conn;  
-        -> cb->is_client_to_target = true;  
+        -> cb->is_to_target = true;  
         -> cb->is_read = true;  
 ``` 
 

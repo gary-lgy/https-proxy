@@ -39,7 +39,7 @@ struct epoll_connecting_cb {
 struct epoll_tunneling_cb {
   enum epoll_cb_type type;
   struct tunnel_conn* conn;
-  bool is_client_to_target;
+  bool is_to_target;
   bool is_read;
 };
 

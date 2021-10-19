@@ -31,8 +31,8 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   struct epoll_tunneling_cb* cb = malloc(sizeof(struct epoll_tunneling_cb));
   cb->type = cb_type_tunneling;
   cb->conn = conn;
-  cb->is_client_to_target = false;  // destination is client
-  cb->is_read = false;              // writing to client
+  cb->is_to_target = false;  // destination is client
+  cb->is_read = false;       // writing to client
 
   struct epoll_event event;
   event.events = EPOLLOUT | EPOLLONESHOT;
@@ -84,7 +84,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     DEBUG_LOG("sending %d left over bytes after CONNECT", n_bytes_remaining);
     cb->type = cb_type_tunneling;
     cb->conn = conn;
-    cb->is_client_to_target = true;
+    cb->is_to_target = true;
     cb->is_read = false;
 
     event.events = EPOLLOUT | EPOLLONESHOT;
@@ -112,7 +112,7 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     cb = malloc(sizeof(struct epoll_tunneling_cb));
     cb->type = cb_type_tunneling;
     cb->conn = conn;
-    cb->is_client_to_target = true;
+    cb->is_to_target = true;
     cb->is_read = true;
 
     event.events = EPOLLIN | EPOLLONESHOT;
@@ -175,7 +175,7 @@ void handle_tunneling_read(
   }
 
   DEBUG_LOG("received %zu bytes (%s) -> (%s)", n_bytes_read, source_hostport, dest_hostport);
-  if (!cb->is_client_to_target) {
+  if (!cb->is_to_target) {
     cb->conn->n_bytes_streamed += n_bytes_read;
   }
 
@@ -275,13 +275,13 @@ void handle_tunneling_write(
 }
 
 void handle_tunneling_cb(int epoll_fd, struct epoll_tunneling_cb* cb, uint32_t events) {
-  const char* source_hostport = cb->is_client_to_target ? cb->conn->client_hostport : cb->conn->target_hostport;
-  const char* dest_hostport = cb->is_client_to_target ? cb->conn->target_hostport : cb->conn->client_hostport;
+  const char* source_hostport = cb->is_to_target ? cb->conn->client_hostport : cb->conn->target_hostport;
+  const char* dest_hostport = cb->is_to_target ? cb->conn->target_hostport : cb->conn->client_hostport;
   struct tunnel_buffer* buf =
-      cb->is_client_to_target ? &cb->conn->client_to_target_buffer : &cb->conn->target_to_client_buffer;
+      cb->is_to_target ? &cb->conn->client_to_target_buffer : &cb->conn->target_to_client_buffer;
 
   int polled_fd, opposite_fd;
-  if (cb->is_client_to_target) {
+  if (cb->is_to_target) {
     if (cb->is_read) {
       polled_fd = cb->conn->client_socket;
       opposite_fd = cb->conn->target_socket_dup;
