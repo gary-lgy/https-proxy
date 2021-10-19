@@ -47,12 +47,12 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
         errno == EINPROGRESS) {
       // we're connected or connecting to the current address
       cb->next_addr = cb->next_addr->ai_next;
-      cb->target_conn_sock = sock;
+      cb->target_sock = sock;
 
       struct epoll_event event;
       event.events = EPOLLOUT | EPOLLONESHOT;
       event.data.ptr = cb;
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_conn_sock, &event) < 0) {
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event) < 0) {
         char* error_desc = errno2s(errno);
         DEBUG_LOG("failed to add target socket into epoll: %s", error_desc);
         free(error_desc);
@@ -116,10 +116,7 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
     if (strstr(conn->target_host, blacklist[i]) != NULL) {
       conn->is_blocked = true;
       fail_connecting_cb(epoll_fd, cb);
-      DEBUG_LOG(
-        "block target: '%s' as it matches '%s'",
-        cb->conn->target_host,
-        blacklist[i]);
+      DEBUG_LOG("block target: '%s' as it matches '%s'", cb->conn->target_host, blacklist[i]);
       return;
     }
   }
@@ -229,14 +226,14 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
     // connection succeeded or failed
     struct sockaddr_in addr;
     socklen_t addrlen = sizeof(addr);
-    if (getpeername(cb->target_conn_sock, &addr, &addrlen) < 0) {
+    if (getpeername(cb->target_sock, &addr, &addrlen) < 0) {
       // connection failed; try connecting with another address
-      shutdown(cb->target_conn_sock, SHUT_RDWR);
-      close(cb->target_conn_sock);
+      shutdown(cb->target_sock, SHUT_RDWR);
+      close(cb->target_sock);
       init_connection_to_target(epoll_fd, cb);
     } else {
       // connection succeeded
-      cb->conn->target_socket = cb->target_conn_sock;
+      cb->conn->target_socket = cb->target_sock;
       DEBUG_LOG("connected to %s", cb->conn->target_hostport);
 
       enter_tunneling_state(epoll_fd, cb->conn);

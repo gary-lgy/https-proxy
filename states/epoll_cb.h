@@ -3,6 +3,9 @@
 
 #include "../tunnel_conn.h"
 
+// cb: callback and/or control block
+// contains info about a connection specific to a connection state
+
 enum epoll_cb_type {
   cb_type_accepted,
   cb_type_connecting,
@@ -25,7 +28,7 @@ struct epoll_connecting_cb {
   int asyncaddrinfo_fd;
   struct addrinfo* host_addrs;
   struct addrinfo* next_addr;
-  int target_conn_sock;
+  int target_sock;
   bool failed;
 };
 
@@ -40,7 +43,12 @@ struct epoll_tunneling_cb {
   bool is_read;
 };
 
-void accept_incoming_connections(int epoll_fd, int listening_socket, bool telemetry_enabled, char** blacklist, int blacklist_len);
+void accept_incoming_connections(
+    int epoll_fd,
+    int listening_socket,
+    bool telemetry_enabled,
+    char** blacklist,
+    int blacklist_len);
 void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t events);
 
 void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn);

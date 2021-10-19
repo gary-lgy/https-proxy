@@ -100,7 +100,7 @@ struct epoll_event event;
 event.events = EPOLLOUT | EPOLLONESHOT;
 event.data.ptr = cb;
 
-epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_conn_sock, &event)  
+epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)  
 ```
 
 - If DNS resolution or connection fails, send HTTP 4xx to client.
