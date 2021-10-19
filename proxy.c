@@ -15,6 +15,7 @@
 #define CONNECT_BACKLOG 512
 #define EPOLL_MAX_EVENTS 64
 #define DEFAULT_MAX_THREADS 8
+#define MAX_BLACKLIST_LEN 100
 
 int create_bind_listen(unsigned short port) {
   int listening_socket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
@@ -110,6 +111,43 @@ void* handle_connections_in_event_loop_pthread_wrapper(void* raw_args) {
   return NULL;
 }
 
+int read_blacklist(const char* blacklist_path, char*** blacklist_ptr) {
+  char** blacklist = *blacklist_ptr = calloc(MAX_BLACKLIST_LEN, sizeof(char*));
+
+  FILE* fp = fopen(blacklist_path, "r");
+  if (fp == NULL) {
+    die(hsprintf("could not open file: '%s'", blacklist_path));
+  }
+
+  size_t buffer_len = 0;
+  int blacklist_len = 0;
+
+  while (1) {
+    if (blacklist_len >= MAX_BLACKLIST_LEN) {
+      die("too many entries in the blacklist. Only up to 100 is supported.");
+      return -1;
+    }
+
+    if (getline(&blacklist[blacklist_len], &buffer_len, fp) == -1) {
+      free(blacklist[blacklist_len]);
+      break;
+    }
+
+    size_t char_count = strcspn(blacklist[blacklist_len], "\r\n");
+    if (char_count == 0) {
+      // empty line
+      continue;
+    }
+    blacklist[blacklist_len][char_count] = '\0';
+    DEBUG_LOG("Read blacklist entry %d: %s", blacklist_len, blacklist[blacklist_len]);
+    blacklist_len++;
+  }
+
+  fclose(fp);
+
+  return blacklist_len;
+}
+
 int main(int argc, char** argv) {
   if (argc < 4 || argc > 5) {
     die(hsprintf("Usage: %s <port> <flag_telemetry> <path to blacklist file> [max threads]", argv[0]));
@@ -133,26 +171,8 @@ int main(int argc, char** argv) {
   }
 
   const char* blacklist_path = argv[3];
-  char** blacklist = calloc(100, sizeof(char *));
-  FILE *fp;
-  fp = fopen(blacklist_path, "r");
-  if (fp == NULL) {
-    die(hsprintf("could not open file: '%s'", argv[3]));
-  }
-  int i = 0;
-  size_t len;
-  ssize_t nread;
-  while ((nread = getline(&blacklist[i], &len, fp)) != -1) {
-    size_t len = strcspn(blacklist[i], "\r\n");
-    if (len == 0) {
-      continue;
-    }
-    blacklist[i][len] = '\0';
-    DEBUG_LOG("Read blacklist entry %d: %s", i, blacklist[i]);
-    i++;
-  }
-  int blacklist_len = i;
-  fclose(fp);
+  char** blacklist;
+  int blacklist_len = read_blacklist(blacklist_path, &blacklist);
 
   unsigned short max_threads = DEFAULT_MAX_THREADS;
   if (argc == 5) {
