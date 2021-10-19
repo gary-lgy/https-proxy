@@ -152,11 +152,11 @@ void handle_tunneling_read(
 
   if (n_bytes_read == 0) {
     // peer stopped sending
-    DEBUG_LOG("peer (%s) -> (%s) closed connection", source_hostport, dest_hostport);
+    LOG("peer (%s) -> (%s) closed connection", source_hostport, dest_hostport);
     shutdown(polled_fd, SHUT_RD);
     shutdown(opposite_fd, SHUT_WR);
     if (++cb->conn->halves_closed == 2) {
-      DEBUG_LOG("tunnel (%s) -> (%s) closed", cb->conn->client_hostport, cb->conn->target_hostport);
+      LOG("tunnel (%s) -> (%s) closed", cb->conn->client_hostport, cb->conn->target_hostport);
       // both halves closed, tear down the whole connection
       destroy_tunnel_conn(cb->conn);
       free(cb);
@@ -165,7 +165,7 @@ void handle_tunneling_read(
   } else if (n_bytes_read < 0) {
     // read error
     char* error_desc = errno2s(errno);
-    DEBUG_LOG("read error from (%s) -> (%s): %s", source_hostport, dest_hostport, error_desc);
+    LOG("read error from (%s) -> (%s): %s", source_hostport, dest_hostport, error_desc);
     free(error_desc);
 
     destroy_tunnel_conn(cb->conn);
@@ -220,7 +220,7 @@ void handle_tunneling_write(
     // peer refused to receive?
     // teardown the entire connection
     char* error_desc = errno2s(errno);
-    DEBUG_LOG("write error from (%s) -> (%s): %s", source_hostport, dest_hostport, error_desc);
+    LOG("write error from (%s) -> (%s): %s", source_hostport, dest_hostport, error_desc);
     free(error_desc);
 
     destroy_tunnel_conn(cb->conn);

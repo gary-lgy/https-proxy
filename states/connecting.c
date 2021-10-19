@@ -70,7 +70,7 @@ void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
   }
 
   // none of the addresses work
-  DEBUG_LOG("failed to connect to target %s: no more addresses to try", cb->conn->target_hostport);
+  LOG("failed to connect to target %s: no more addresses to try", cb->conn->target_hostport);
   freeaddrinfo(cb->host_addrs);
   fail_connecting_cb(epoll_fd, cb);
 }
@@ -116,7 +116,7 @@ void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
     if (strstr(conn->target_host, blacklist[i]) != NULL) {
       conn->is_blocked = true;
       fail_connecting_cb(epoll_fd, cb);
-      DEBUG_LOG("block target: '%s' as it matches '%s'", cb->conn->target_host, blacklist[i]);
+      LOG("block target: '%s' as it matches '%s'", cb->conn->target_host, blacklist[i]);
       return;
     }
   }
@@ -143,8 +143,7 @@ void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
   if (n_bytes_sent < 0) {
     // teardown the entire connection
     char* error_desc = errno2s(errno);
-    DEBUG_LOG(
-        "failed to write 4xx response for (%s) -> (%s): %s",
+    LOG("failed to write 4xx response for (%s) -> (%s): %s",
         cb->conn->client_hostport,
         cb->conn->target_hostport,
         error_desc);
@@ -207,8 +206,7 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
     // asyncaddrinfo result came back
     int gai_errno = asyncaddrinfo_result(cb->asyncaddrinfo_fd, &cb->host_addrs);
     if (gai_errno != 0) {
-      DEBUG_LOG(
-          "host resolution for (%s) -> (%s) failed: %s",
+      LOG("host resolution for (%s) -> (%s) failed: %s",
           cb->conn->client_hostport,
           cb->conn->target_hostport,
           gai_strerror(gai_errno));
@@ -217,7 +215,7 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
     }
     cb->asyncaddrinfo_fd = -1;
 
-    DEBUG_LOG("host resolution succeeded for (%s) -> (%s)", cb->conn->client_hostport, cb->conn->target_hostport);
+    LOG("host resolution succeeded for (%s) -> (%s)", cb->conn->client_hostport, cb->conn->target_hostport);
 
     // start connecting
     cb->next_addr = cb->host_addrs;
@@ -234,7 +232,7 @@ void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t
     } else {
       // connection succeeded
       cb->conn->target_socket = cb->target_sock;
-      DEBUG_LOG("connected to %s", cb->conn->target_hostport);
+      LOG("connected to %s", cb->conn->target_hostport);
 
       enter_tunneling_state(epoll_fd, cb->conn);
 

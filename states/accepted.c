@@ -38,7 +38,7 @@ void accept_incoming_connections(
     conn->client_socket = client_socket;
     set_client_hostport(conn, &client_addr);
 
-    DEBUG_LOG("Received connection from %s", conn->client_hostport);
+    LOG("Received connection from %s", conn->client_hostport);
 
     // add client socket to epoll and wait for readability
     struct epoll_accepted_cb* cb = malloc(sizeof(struct epoll_accepted_cb));
@@ -99,8 +99,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
 
   if (n_bytes_read < 0) {
     char* errno_desc = errno2s(errno);
-    DEBUG_LOG(
-        "reading for CONNECT from %s failed: %s, received %d bytes: %s",
+    LOG("reading for CONNECT from %s failed: %s, received %d bytes: %s",
         conn->client_hostport,
         errno_desc,
         buf->write_ptr - buf->start,
@@ -110,8 +109,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
   }
 
   if (n_bytes_read == 0) {
-    DEBUG_LOG(
-        "client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
+    LOG("client %s closed the connection before sending full http CONNECT message, received %d bytes: %s",
         conn->client_hostport,
         buf->write_ptr - buf->start,
         buf->start);
@@ -124,7 +122,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
     char *host, *port, *http_version;
     if (parse_http_connect_message(buf->start, &host, &port, &http_version) < 0) {
       // malformed CONNECT
-      DEBUG_LOG("couldn't parse CONNECT message: %s", buf->start);
+      LOG("couldn't parse CONNECT message: %s", buf->start);
       return -1;
     }
 
@@ -136,7 +134,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
 
     buf->read_ptr = double_crlf + 4;  // skip over the double crlf
 
-    DEBUG_LOG("received CONNECT request: %s %s:%s", conn->http_version, conn->target_host, conn->target_port);
+    LOG("received CONNECT request: %s %s:%s", conn->http_version, conn->target_host, conn->target_port);
 
     return 0;
   }
@@ -145,7 +143,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
 
   if (buf->write_ptr >= buf->start + BUFFER_SIZE - 1) {
     // no, the buffer is full
-    DEBUG_LOG("no CONNECT message from %s until buffer is full, buffer content: %s", conn->client_hostport, buf->start);
+    LOG("no CONNECT message from %s until buffer is full, buffer content: %s", conn->client_hostport, buf->start);
     return -1;
   }
 
