@@ -84,7 +84,8 @@ void handle_connections_in_event_loop(struct event_loop_args* args) {
           DEBUG_LOG("listening socket is not readable but epoll woke us up anyway");
           continue;
         }
-        accept_incoming_connections(epoll_fd, args->listening_socket, args->telemetry_enabled, args->blacklist, args->blacklist_len);
+        accept_incoming_connections(
+            epoll_fd, args->listening_socket, args->telemetry_enabled, args->blacklist, args->blacklist_len);
       } else {
         // events on existing connection
         struct epoll_cb* cb = events[i].data.ptr;
@@ -106,7 +107,7 @@ void handle_connections_in_event_loop(struct event_loop_args* args) {
 
 void* handle_connections_in_event_loop_pthread_wrapper(void* raw_args) {
   struct event_loop_args* args = raw_args;
-  thread_id__ = args->thread_id; // for logging purpose
+  thread_id__ = args->thread_id;  // for logging purpose
   handle_connections_in_event_loop(args);
   return NULL;
 }

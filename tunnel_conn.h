@@ -13,6 +13,19 @@
 #define HOST_PORT_BUF_SIZE 1024
 
 /**
+ * Producers will write bytes into the buffer,
+ * and consumers will read data from the buffer.
+ *
+ * We will have one buffer for each direction of the tunneling connection.
+ * Take the direction from client to target.
+ * The proxy will receive data from the client, place it into a buffer, and then send
+ * the data to the target.
+ * The producer in this direction is the client and the consumer is the target.
+ *
+ * In the opposite direction where we receive data from the target and send it to the client,
+ * the producer is the target and the consumer is the client.
+ *
+ *
  * The buffer layout looks like this:
  * The first section is data that has already been written and read.
  * The second section is data that is written but yet to be read from the buffer.

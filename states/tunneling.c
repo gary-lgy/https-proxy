@@ -32,8 +32,8 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   struct epoll_tunneling_cb* cb = malloc(sizeof(struct epoll_tunneling_cb));
   cb->type = cb_type_tunneling;
   cb->conn = conn;
-  cb->is_client_to_target = false;
-  cb->is_read = false;
+  cb->is_client_to_target = false;  // destination is client
+  cb->is_read = false;              // writing to client
 
   struct epoll_event event;
   event.events = EPOLLOUT | EPOLLONESHOT;
@@ -58,9 +58,9 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   // However, we have no idea which FDs are in the epoll instance already.
   // For convenience, we make sure all FDs have been added to the epoll instance.
   // Hence, we can use EPOLL_CTL_MOD later when we want to wait on the socket again.
-  
-  // Add target_write_fb to epoll since it is never added before
-  // The other 3 have already been added
+
+  // Add target_write_fd to epoll since it is never added before.
+  // The other 3 FDs have already been added.
   event.events = EPOLLERR | EPOLLONESHOT;
   event.data.ptr = NULL;
   if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, target_write_fd, &event) < 0) {
@@ -182,6 +182,7 @@ void handle_tunneling_read(
 
   buf->write_ptr += n_bytes_read;
 
+  // we will then write into opposite_fd
   cb->is_read = false;
 
   struct epoll_event event;
@@ -254,7 +255,9 @@ void handle_tunneling_write(
       free(cb);
     }
   } else {
-    // wait for writability to send again later
+    // We didn't manage to send all the bytes.
+    // This can happen when the TCP buffer is full for a slow receiver.
+    // Wait for writability to send again later.
     event.events = EPOLLOUT | EPOLLONESHOT;
     event.data.ptr = cb;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, polled_fd, &event) < 0) {
