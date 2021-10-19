@@ -202,29 +202,27 @@ int main(int argc, char** argv) {
 
   int listening_socket = create_bind_listen(listening_port);
 
+  // start the addr info lookup threads
+  asyncaddrinfo_init(asyncaddrinfo_threads);
+
+  // start the connection threads
   struct event_loop_args args_list[connection_threads];
   for (int i = 0; i < connection_threads; i++) {
-    struct event_loop_args args = {
-      .listening_socket = listening_socket,
-      .telemetry_enabled = telemetry_enabled,
-      .thread_id = i,
-      .blacklist = blacklist,
-      .blacklist_len = blacklist_len,
-    };
-
-    args_list[i] = args;
+    args_list[i].listening_socket = listening_socket;
+    args_list[i].telemetry_enabled = telemetry_enabled;
+    args_list[i].thread_id = i;
+    args_list[i].blacklist = blacklist;
+    args_list[i].blacklist_len = blacklist_len;
   }
 
   pthread_t workers[connection_threads - 1];
-  int s;
   for (int i = 0; i < connection_threads - 1; i++) {
-    s = pthread_create(&workers[i], NULL, handle_connections_in_event_loop_pthread_wrapper, &args_list[i + 1]);
-    if (s != 0) {
-      die(hsprintf("error creating thread %d, error=%d", i + 1, s));
+    // child threads will have id from 1 onwards
+    // the main thread will be thread 0
+    if (0 != pthread_create(&workers[i], NULL, handle_connections_in_event_loop_pthread_wrapper, &args_list[i + 1])) {
+      die(hsprintf("error creating thread %d: %s", i + 1, errno2s(errno)));
     }
   }
-
-  asyncaddrinfo_init(asyncaddrinfo_threads);
 
   printf("Accepting requests\n");
   // run another event loop on the main thread
@@ -237,11 +235,15 @@ int main(int argc, char** argv) {
   }
 
   for (int i = 0; i < connection_threads; i++) {
-    s = pthread_join(workers[i], NULL);
-    if (s != 0) {
-      die(hsprintf("error joining thread %d, error=%d", i + 1, s));
+    if (0 != pthread_join(workers[i], NULL)) {
+      die(hsprintf("error joining thread %d: %s", i + 1, errno2s(errno)));
     }
   }
+
+  for (int i = 0; i < blacklist_len; i++) {
+    free(blacklist[i]);
+  }
+  free(blacklist);
 
   asyncaddrinfo_cleanup();
 
