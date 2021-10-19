@@ -71,7 +71,6 @@ void handle_connections_in_event_loop(struct event_loop_args* args) {
     DEBUG_LOG("epoll_wait returned %d", num_events);
     if (num_events < 0) {
       die(hsprintf("epoll_wait error: %s", errno2s(errno)));
-      break;
     }
 
     for (int i = 0; i < num_events; i++) {
@@ -126,7 +125,6 @@ int read_blacklist(const char* blacklist_path, char*** blacklist_ptr) {
   while (1) {
     if (blacklist_len >= MAX_BLACKLIST_LEN) {
       die("too many entries in the blacklist. Only up to 100 is supported.");
-      return -1;
     }
 
     if (getline(&blacklist[blacklist_len], &buffer_len, fp) == -1) {

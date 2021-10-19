@@ -3,6 +3,6 @@
 
 char* hsprintf(const char* fmt, ...);
 char* errno2s(int errnum);
-void die(const char* message);
+__attribute__((noreturn)) void die(const char* message);
 
 #endif  // HTTPS_PROXY_UTIL_H
