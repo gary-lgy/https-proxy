@@ -23,7 +23,6 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
   int target_read_fd = conn->target_socket;
   int target_write_fd = conn->target_socket_dup = dup(target_read_fd);
 
-  // TODO: free memory / close dup when cleaning up after error
   // Send HTTP 200 to client
   int n_bytes =
       sprintf(conn->target_to_client_buffer.start, "%s 200 Connection Established \r\n\r\n", conn->http_version);
@@ -74,9 +73,9 @@ void enter_tunneling_state(int epoll_fd, struct tunnel_conn* conn) {
     free(error_desc);
 
     destroy_tunnel_conn(conn);
+    free(cb);
     return;
   }
-
 
   size_t n_bytes_remaining = conn->client_to_target_buffer.write_ptr - conn->client_to_target_buffer.read_ptr;
   cb = malloc(sizeof(struct epoll_tunneling_cb));

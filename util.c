@@ -6,7 +6,6 @@
 #define ERRNO_BUF_SIZE 1024
 
 // Returns a heap-allocated string formatted as required.
-// TODO: look for memory leaks
 char* hsprintf(const char* fmt, ...) {
   va_list args1;
   va_start(args1, fmt);
