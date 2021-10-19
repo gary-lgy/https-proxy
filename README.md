@@ -13,7 +13,7 @@ The executable will be in `./out` directory.
 2. Start the proxy
 
 ```
-./out/proxy <port> <flag_telemetry> <path to blacklist file> [max threads]
+./out/proxy <port> <flag_telemetry> <path to blacklist file> [thread count]
 ```
 
 For example, to start the proxy with the following configurations,
@@ -21,12 +21,11 @@ For example, to start the proxy with the following configurations,
 - listening on port 3000
 - with telemetry enabled
 - a blacklist file with name 'blacklist.txt' in `./out` directory
-- a maximum number of 8 threads are used
+- 8 threads are used
 
 run `./out/proxy 3000 1 out/blacklist.txt 8`
 
-Note: The default maximum number of threads is 8 if `max threads` is not specified. The maximum number of threads should
-be at least 2.
+Note: The default number of threads is 8 if `thread count` is not specified. At least 2 threads are required.
 
 3. Connect to SoC VPN
 

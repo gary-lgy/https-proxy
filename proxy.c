@@ -14,7 +14,7 @@
 
 #define CONNECT_BACKLOG 512
 #define EPOLL_MAX_EVENTS 64
-#define DEFAULT_MAX_THREADS 8
+#define DEFAULT_THREAD_COUNT 8
 #define MAX_BLACKLIST_LEN 100
 
 int create_bind_listen(unsigned short port) {
@@ -149,7 +149,7 @@ int read_blacklist(const char* blacklist_path, char*** blacklist_ptr) {
 
 int main(int argc, char** argv) {
   if (argc < 4 || argc > 5) {
-    die(hsprintf("Usage: %s <port> <flag_telemetry> <path to blacklist file> [max threads]", argv[0]));
+    die(hsprintf("Usage: %s <port> <flag_telemetry> <path to blacklist file> [thread count]", argv[0]));
   }
 
   char* endptr;
@@ -173,24 +173,24 @@ int main(int argc, char** argv) {
   char** blacklist;
   int blacklist_len = read_blacklist(blacklist_path, &blacklist);
 
-  unsigned short max_threads = DEFAULT_MAX_THREADS;
+  unsigned short thread_count = DEFAULT_THREAD_COUNT;
   if (argc == 5) {
-    max_threads = strtol(argv[4], &endptr, 10);
+    thread_count = strtol(argv[4], &endptr, 10);
     if (*endptr != '\0') {
-      die(hsprintf("failed to parse max threads '%s'", argv[4]));
+      die(hsprintf("failed to parse thread count '%s'", argv[4]));
     }
-    if (max_threads < 2) {
+    if (thread_count < 2) {
       die("at least 2 threads are required");
     }
   }
 
   // use a quarter of the threads (or minimally 1) for async getaddrinfo
   // use the rest (including the main thread) to run event loops and handle connections
-  unsigned short asyncaddrinfo_threads = max_threads / 4;
+  unsigned short asyncaddrinfo_threads = thread_count / 4;
   if (asyncaddrinfo_threads < 1) {
     asyncaddrinfo_threads = 1;
   }
-  unsigned short connection_threads = max_threads - asyncaddrinfo_threads;
+  unsigned short connection_threads = thread_count - asyncaddrinfo_threads;
 
   printf("- listening port:                          %hu\n", listening_port);
   printf("- telemetry enabled:                       %s\n", telemetry_enabled ? "yes" : "no");
