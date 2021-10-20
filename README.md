@@ -2,6 +2,8 @@
 
 ## Setup
 
+## 1. Setup
+
 1. Compile the source code
 
 ```
@@ -35,14 +37,14 @@ for this is explained later).
 
 6. Start browsing!
 
-## Terminology
+## 2. Terminology
 
 - `client`: the host that requested for a tunnel
 - `target`: the host that the client requested to connect to
 
-## Design
+## 3. Design
 
-### Multiplexed, Non-blocking Network IO
+### 3.1 Multiplexed, Non-blocking Network IO
 
 Being the proxy, we need to read from both ends and send any data we receive from one end to the other end.
 
@@ -80,7 +82,7 @@ directly. Instead, we add it to our `epoll` instance and watch it for IO readine
 he socket is ready do we perform the IO. Meanwhile, we can service other sockets that are ready. This allows each thread
 to handle many connections concurrently even on a single thread.
 
-### Asynchronous DNS resolution
+### 3.2 Asynchronous DNS resolution
 
 The typical way to perform DNS resolution in C is to call the `getaddrinfo` library function. Unfortunately, this is a
 blocking call. In some cases, we observed `getaddrinfo` to block the calling thread for up to 6 seconds when looking up
@@ -99,7 +101,7 @@ We allocate 25% of our threads to `asyncaddrinfo`, i.e., if we run with 8 thread
 for `asyncaddrinfo`. At least one thread must be allocated to `asyncaddrinfo`. This is the reason why the proxy needs at
 least 2 threads (the other thread is to run an `epoll` instance and handle IO on sockets).
 
-### Multithreading and Synchronization
+### 3.3 Multithreading and Synchronization
 
 On program start, the proxy will create a listening socket and listen on the designated port for incoming connections.
 It will then spawn a number of threads, some of which are for `asyncaddrinfo`, and the rest (including the main thread)
@@ -115,7 +117,7 @@ connection socket to its own `epoll` instance and no one else's. When the socket
 the only thread to receive the notification. As a result, there will be no race conditions and no additional
 synchronisation for the connection are needed.
 
-### Lifecycle of a Connection
+### 3.4 Lifecycle of a Connection
 
 As explained above, all the threads will monitor the listening socket for incoming connections.
 
@@ -191,9 +193,9 @@ __target-to-client direction__
 At any time, if either the client connection or the target connection is closed, we close the other connection as well
 and terminate the tunnel.
 
-## HTTP/1.0 vs HTTP/1.1
+## 4. HTTP/1.0 vs HTTP/1.1
 
-### Experiment
+### 4.1 Experiment
 
 HTTP/1.0: telemetry when visiting `https://www.nus.edu.sg/`
 ```
@@ -296,11 +298,12 @@ Hostname: content.presspage.com, Size: 1616948 bytes, Time: 116.299 sec
 Hostname: content.presspage.com, Size: 1165799 bytes, Time: 116.307 sec
 ```
 
-### Observations
+### 4.2 Observations
 
 As shown in the telemetry above, when using HTTP/1.0, 
 - there are much more tunnel connections established
 - there are many short-lived (< 0.2 seconds) tunnel connections with small byte transfer 
+
 whereas when using HTTP/1.1,
 - there are much fewer tunnel connections established
 - each connection has much higher byte transfer
@@ -308,11 +311,11 @@ whereas when using HTTP/1.1,
 
 It is also worth noting that when using HTTP/1.0, there are still a small number of persistent connections. It turns out that these HTTP requests and responses include the "Connection: keep-alive" header, even it is not part of the HTTP/1.0 standard.
 
-### Explanation
+### 4.3 Explanation
 
 For HTTP/1.0, there is only one request and response for each TCP connection. However, for HTTP/1.1, it uses persistent connections by default, where multiple requests and responses can be sent over the same TCP connection. Hence, we observed more TCP connections established with short connection duration in the telemetry when running on HTTP/1.0.
 
-## External Libraries Used
+## 5. External Libraries Used
 
 ### asyncaddrinfo
 
@@ -320,7 +323,7 @@ For HTTP/1.0, there is only one request and response for each TCP connection. Ho
 - Source included under `lib/asyncaddrinfo`
 - BSD License
 
-## References
+## 6. References
 
 - https://en.cppreference.com/w/c
 - https://stackoverflow.com/
