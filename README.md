@@ -25,26 +25,98 @@ For example, to start the proxy with the following configurations,
 
 run `./out/proxy 3000 1 out/blacklist.txt 8`
 
-Note: The default number of threads is 8 if `thread count` is not specified. At least 2 threads are required.
+Note: The default number of threads is 8 if `thread count` is not specified. At least 2 threads are required (the reason
+for this is explained later).
 
-3. Connect to SoC VPN
+3. Connect to SoC VPN (because `xcne1` and `xcne2` are not publicly accessible)
 
-4. Configure the FireFox settings according to the instructions given in the project doc
+4. Configure the FireFox settings according to the instructions given in the project doc. Use the IP address of `xcne1`
+   or `xcne2` (where you're running the proxy) and the port number you have specified when starting the proxy.
 
-5. Start browsing!
+6. Start browsing!
 
 ## Design
 
+### Multiplexed, Non-blocking Network IO
+
+Being the proxy, we need to read from both ends and send any data we receive from one end to the other end.
+
+If we have read all the data from a sender, subsequent attempts to read more bytes from the socket will block the
+current thread until more data arrives. Similarly, if we send data to a receiver, and the receiver's TCP buffer fills
+up, subsequent attempts to send more bytes will block until the remote buffer has space again.
+
+If a thread is blocked for IO, it cannot process other connections until the IO completes. This stalls all the pending
+requests that are yet to be served. We could work around this by creating a new thread for each blocking operation
+However, this approach would not scale well when we have many connections open.
+
+Try loading https://www.reddit.com and see how many HTTP requests it makes. On my machine it makes 150 (!) requests in
+the first 10 seconds of loading the page, without any user interaction. If each request is served on a new thread, we
+would create 150 new threads just to serve the homepage of a single website.
+
+It should be obvious that proxying network traffic is inherently an IO-bound task. The performance of the proxy heavily
+depends on how we handle IO in a scalable manner. To do this, we must abandon the blocking and synchronous programming
+paradigm and adopt signal-driven or asynchronous IO.
+
+Various operating systems provide tools for us to do this. The Linux kernel provides `select`, `poll`, and `epoll`, all
+of which are mechanisms for us to monitor a set of file descriptors to see if IO is possible on any of them. We inform
+the kernel what we would like to do with each file descriptor (read or write), and block until at least one of the file
+descriptors is available for the operation we requested for. Once the kernel reports that a file descriptor is ready, we
+know for sure that a subsequent IO will not block.
+
+- `select` can monitor up to `FD_SETSIZE` number of file descriptors at a time, typically a small number (e.g., 1024).
+- `poll` doesn't have a fixed limit of descriptors it can monitor at a time, but requires us to perform a linear scan of
+  all the passed descriptors every time to check readiness notification, which is `O(n)` and slow.
+- `epoll` is meant to replace the older POSIX `select` and `poll` system calls to achieve better performance in more
+  demanding applications, where the number of watched file descriptors is large. It has no such fixed limits, and does
+  not perform any linear scans. However, it is Linux specific.
+
+In our implementation, we use `epoll` to perform IO multiplexing. When we need to perform IO on a socket, we don't do it
+directly. Instead, we add it to our `epoll` instance and watch it for IO readiness. Only after `epoll` notifies us that
+he socket is ready do we perform the IO. Meanwhile, we can service other sockets that are ready. This allows each thread
+to handle many connections concurrently even on a single thread.
+
+### Asynchronous DNS resolution
+
+The typical way to perform DNS resolution in C is to call the `getaddrinfo` library function. Unfortunately, this is a
+blocking call. In some cases, we observed `getaddrinfo` to block the calling thread for up to 6 seconds when looking up
+a domain name that is probably not in the DNS cache. This stalls all the pending tasks on the current thread, including
+the data forwarding using `epoll`, producing very user-noticeable delays in other connections handled by the same thread
+as well.
+
+To solve this problem, we use a small external library `asyncaddrinfo` (link below) which wraps the
+blocking `getaddrinfo` call in an asynchronous API. Internally, it uses a configurable number of worker threads to
+call `getaddrinfo` and gives us a file descriptor to receive the call result.
+
+We can conveniently add the file descriptor into our epoll instance and wait for its readability. This allows the thread
+to keep on serving other requests while `getaddrinfo` is being called concurrently.
+
+We allocate 25% of our threads to `asyncaddrinfo`, i.e., if we run with 8 threads, then 2 threads will be
+for `asyncaddrinfo`. At least one thread must be allocated to `asyncaddrinfo`. This is the reason why the proxy needs at
+least 2 threads (the other thread is to run an `epoll` instance and handle IO on sockets).
+
+### Multithreading and Synchronization
+
+On program start, the proxy will create a listening socket and listen on the designated port for incoming connections.
+It will then spawn a number of threads, some of which are for `asyncaddrinfo`, and the rest (including the main thread)
+are for handling proxy connections and socket IO.
+
+Each connection thread runs its own `epoll` instance and the listening socket is added to each instance. When incoming
+connections arrive, all the connection threads will be notified of the socket's readability, and attempt to accept the
+connection. However, each connection will only be accepted once by kernel guarantees.
+
+The thread that accepted the connection will then be responsible for the lifetime of the connection. All the subsequent
+operations performed on the connection will be done by this thread. More specifically, the thread will only add the
+connection socket to its own `epoll` instance and no one else's. When the socket is ready for IO, this thread will be
+the only thread to receive the notification. As a result, there will be no race conditions and no additional
+synchronisation for the connection are needed.
+
+### Lifecycle of a Connection
+
+As explained above, all the threads will monitor the listening socket for incoming connections.
+
+An accepted connection socket can go through a few states, as shown in the state transition diagram below.
+
 ![](./docs/state-transition-diagram.svg)
-
-1. Of the maximum number of threads allowed for the program (by default 8), 1/4 of the threads (or minimally 1 thread)
-   are allocated for **DNS resolution**. The remaining threads are **connection threads** which are responsible for
-   accepting connections and handling the tunneling between client and server.
-
-2. Open a host TCP socket listening at the designated port and wait for incoming connections. Each connection thread has
-   a `epoll` instance and the listening socket is added to each instance. When incoming connections arrive, all the
-   connection threads will be woken up to accept the connection, but each connection will only be accepted on a single
-   thread. That thread will be responsible for the lifetime of the connection. No additional synchronisation is needed.
 
 ```c
 // `handle_connections_in_event_loop`
@@ -193,8 +265,8 @@ struct tunnel_conn {
   char* http_version; (set in step 3)
 
   // buffers for tunneling
-  struct tunnel_buffer client_to_target_buffer; (set in step 2)
-  struct tunnel_buffer target_to_client_buffer; (set in step 2)
+  struct tunnel_buffer to_target_buffer; (set in step 2)
+  struct tunnel_buffer to_client_buffer; (set in step 2)
 
   // how many directions of this connection have been closed (0, 1, or 2)
   int halves_closed;
@@ -206,80 +278,6 @@ struct tunnel_conn {
 };
 ``` -->
 
-## Why `epoll`?
-
-TODO: what's wrong with one connection per thread? (blocking)
-
-`epoll` is a Linux kernal system call for a scalable I/O event notification mechanism. It monitors multiple file
-descriptors to see whether I/O is possible on any of them. It is meant to replace the older POSIX `select` and `poll`
-system calls, to achieve better performance in more demanding applications, where the number of watched file descriptors
-is large.
-
-`select` can monitor up to FD_SETSIZE number of descriptors at a time, typically a small number determined at libc's
-compile time.  
-`poll` doesn't have a fixed limit of descriptors it can monitor at a time, but apart from other things, even we have to
-perform a linear scan of all the passed descriptors every time to check readiness notification, which is O(n) and
-slow.  
-`epoll` has no such fixed limits, and does not perform any linear scans. Hence it is able to perform better and handle a
-larger number of events.
-
-<!-- ### APIs
-- `epoll_create1(int flags)`  
-Creates an `epoll` object and returns its file descriptor.
-
-- `epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)`  
-Add, modify, or remove entries in the interest list of the epoll instance referred to by the file descriptor `epfd`. The `event` argument describes the object linked to the file descriptor `fd`.
-
-The `struct epoll_event` is defined as:
-```
-typedef union epoll_data {
-    void    *ptr;
-    int      fd;
-    uint32_t u32;
-    uint64_t u64;
-} epoll_data_t;
-
-struct epoll_event {
-    uint32_t     events;    /* Epoll events */
-    epoll_data_t data;      /* User data variable */
-};
-```
-
-The `data` member of the `epoll_event` structure specifies data that
-the kernel should save and then return via `epoll_wait()` when
-this file descriptor becomes ready.
-
-The `events` member of the epoll_event structure is a bit mask
-composed by ORing together zero or more of the following
-available event types:
-
-EPOLLIN  
-    The associated file is available for read(2) operations.
-
-EPOLLOUT  
-    The associated file is available for write(2) operations.
-
-EPOLLERR  
-    Error condition happened on the associated file
-    descriptor.
-
-EPOLLONESHOT (since Linux 2.6.2)  
-    Requests one-shot notification for the associated file
-    descriptor.  This means that after an event notified for
-    the file descriptor by epoll_wait(2), the file descriptor
-    is disabled in the interest list and no other events will
-    be reported by the epoll interface.  The user must call
-    epoll_ctl() with EPOLL_CTL_MOD to rearm the file
-    descriptor with a new event mask.
-
-EPOLLET  
-    Requests edge-triggered notification for the associated
-    file descriptor. Edge-triggered mode delivers events only 
-    when changes occur on the monitored file descriptor
-
-- `epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)`
-Waits for any of the events registered for with `epoll_ctl`, until at least one occurs or the timeout elapses. Returns the orccurred events in `events`, up to `maxvvents` at once. -->
-
 ## External Libraries Used
 
 ### asyncaddrinfo
@@ -287,17 +285,6 @@ Waits for any of the events registered for with `epoll_ctl`, until at least one 
 - Repository: https://github.com/firestuff/asyncaddrinfo
 - Source included under `lib/asyncaddrinfo`
 - BSD License
-
-Wraps the blocking `getaddrinfo` call in an asynchronous API.
-
-Internally, it uses a configurable number of worker threads to call `getaddrinfo` and sends the result back
-using `socketpair`.
-
-We can add the read end of the `socketpair` into our epoll instances and wait for readability. This allows the server to
-keep on serving other requests while `getaddrinfo` is being called concurrently.
-
-We allocate 25% our threads for asyncaddrinfo, i.e., if we run with a maximum of 8 threads, then 2 threads will be
-for `asyncaddrinfo` and 6 will run event loops to serve client.
 
 ## References
 
