@@ -20,7 +20,7 @@ For example, to start the proxy with the following configurations,
 
 - listening on port 3000
 - with telemetry enabled
-- a blacklist file with name 'blacklist.txt' in `./out` directory
+- a blacklist file with name `blacklist.txt` in `./out` directory
 - 8 threads are used
 
 run `./out/proxy 3000 1 out/blacklist.txt 8`
@@ -34,6 +34,11 @@ for this is explained later).
    or `xcne2` (where you're running the proxy) and the port number you have specified when starting the proxy.
 
 6. Start browsing!
+
+## Terminology
+
+- `client`: the host that requested for a tunnel
+- `target`: the host that the client requested to connect to
 
 ## Design
 
@@ -118,165 +123,73 @@ An accepted connection socket can go through a few states, as shown in the state
 
 ![](./docs/state-transition-diagram.svg)
 
-```c
-// `handle_connections_in_event_loop`
-struct epoll_event event;
-// Configure `event.data.ptr` to be NULL when there are events on listening socket
-event.data.ptr = NULL;
-// Since we will call `accept4` until there are no more incoming connections,
-// and edge-triggered is more efficient than level-triggered,
-// we can register edge-triggered notification for read events on the listening socket
-event.events = EPOLLIN | EPOLLET;
+#### Accepted state
 
-epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listening_socket, &event) 
-```  
+Once an incoming connections is accepted, we add the socket to the handling thread's `epoll` instance and wait for the
+HTTP CONNECT message from the client socket.
 
-3. Once an incoming connections is accepted, add the client socket to the handling thread's `epoll` instance and wait
-   for the HTTP CONNECT message from the client socket.
+When the client socket is available for reading, read the bytes sent by the client and try to parse the HTTP CONNECT
+message.
 
-```c
-// `accept_incoming_connections`
-struct epoll_accepted_cb* cb = malloc(sizeof(struct epoll_accepted_cb));
-cb->type = cb_type_accepted;
-cb->conn = conn;
-
-struct epoll_event event;
-event.events = EPOLLIN | EPOLLONESHOT;
-event.data.ptr = cb;
-
-epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event)
-```
-
-3. When the client socket is available for reading, parse the HTTP CONNECT message.
-
-- If the message is incomplete, read the existing fragment into the buffer and continue waiting for more data to be read
-  from the client socket by registering read event of the client socket into the `epoll` instance.
-
-```c
-// `handle_accepted_cb`
-struct epoll_event event;
-event.events = EPOLLIN | EPOLLONESHOT;
-event.data.ptr = cb;
-
-epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event)
-```
-
-- If the message is well formed and complete, start hostname lookup at the DNS thread.
-
-```c
-struct epoll_connecting_cb* cb = malloc(sizeof(struct epoll_connecting_cb));
-cb->type = cb_type_connecting;
-cb->conn = conn;
-cb->failed = false;
-
-struct epoll_event event;
-event.events = EPOLLIN | EPOLLONESHOT;
-event.data.ptr = cb;
-
-epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->asyncaddrinfo_fd, &event)
-```
-
+- If the message is incomplete, continue waiting for more data to be read from the client socket by registering read
+  event of the client socket into the `epoll` instance.
+- If the message is well-formed and complete, enter the __connectng__ state and start hostname lookup by submitting a
+  lookup job to `asyncaddrinfo`. Add the file descriptor returned by `asyncaddrinfo` and add it to `epoll` to monitor
+  its readability.
 - If the message is malformed, close the connection.
 
-4. When the asyncaddrinfo lookup result is available, initialize target socket and connect to the target.
+#### Connecting state
 
-```c
-struct epoll_event event;
-event.events = EPOLLOUT | EPOLLONESHOT;
-event.data.ptr = cb;
+When the `asyncaddrinfo` lookup result is available, initialize target socket and connect to the target.
 
-epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event)  
-```
+- If DNS resolution or connection fails, send HTTP 4xx to client and close the connection.
 
-- If DNS resolution or connection fails, send HTTP 4xx to client.
+When the target connection is established, enter __tunneling__ state.
 
-5. When the connection is completed, send HTTP 200 to client and start the tunnelling.
-
-- Send HTTP 200 to client
-
-```c
-- epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_write_fd, &event)  
-    -> EPOLLOUT | EPOLLONESHOT  
-    -> event.data.ptr = cb  
-        -> cb->type = cb_type_tunneling;  
-        -> cb->conn = conn;  
-        -> cb->is_to_target = false;  
-        -> cb->is_read = false;  
-```
+- Wait for client socket to become available for sending HTTP 200 to client
 
 - If there is more to write to target, wait for target socket to become available for writing
 
-```c
-- epoll_ctl(epoll_fd, EPOLL_CTL_MOD, target_write_fd, &event) 
-    -> EPOLLOUT | EPOLLONESHOT  
-    -> event.data.ptr = cb  
-        -> cb->type = cb_type_tunneling;  
-        -> cb->conn = conn;  
-        -> cb->is_to_target = true;  
-        -> cb->is_read = false; 
-``` 
-
 - If there is nothing left to write to target, wait for client socket to become available for reading
 
-```c
-- epoll_ctl(epoll_fd, EPOLL_CTL_MOD, client_read_fd, &event)  
-    -> EPOLLIN | EPOLLONESHOT  
-    -> event.data.ptr = cb  
-        -> cb->type = cb_type_tunneling;  
-        -> cb->conn = conn;  
-        -> cb->is_to_target = true;  
-        -> cb->is_read = true;  
-``` 
+#### Tunneling state
 
-6. Once the tunnelling is setup, the following four events forms the event loop and our proxy serves as the relay agent
-   to relay requests/response between client and server.
+Once the tunnelling is setup, our proxy serves as the relay agent to relay requests/response between client and target.
 
-- Client socket becomes available to read (i.e. client sends a request to server), read the data from the client socket
-  into the client_to_target buffer, wait for the target socket to become available for writing so we can send the
-  request to the server.
+There are two directions in this tunnel: client to target and target to client. We will have one buffer for each
+direction of the tunnel. For example, the client-to-target direction will use the buffer named `to_target`
+. The proxy will receive data from the client, place it into the `to_target` buffer, and then send the data to the
+target. The opposite goes on for the target-to-client direction and the `to_client` buffer.
 
-- Target socket becomes available to write (i.e. we can now relay the request from client to server), write the data in
-  client_to_target buffer to the target socket, wait for the target socket to become available for reading so we can
-  read the response from the server.
+For the same buffer, we alternate between sending and receiving. The reason is that once we have read data into the
+buffer, we can no longer read anymore until we send the data out to the opposite end, otherwise the previously read data
+will be overwritted by subsequent reads before they are sent out, resulting in data loss.
 
-- Target socket becomes available to read (i.e. server replies to client), read the data from the target socket into the
-  target_to_client buffer, wait for the client socket to become available for writing so we can send the response to the
-  client.
+The following 4 events can occur while we're in tunneling state.
 
-- Client socket becomes available to write (i.e. we can now relay data from server to client), write the data in
-  target_to_client buffer to the client socket, now wait for the client socket to become available for reading again (
-  i.e. wait for next request)
+__client-to-target direction__
 
-<!-- ```
-struct tunnel_conn {
-  // file descriptors
-  int client_socket; (set in step 2) // read
-  int client_socket_dup; (set in step 5) // write
-  int target_socket; (set in step 4) // read
-  int target_socket_dup; (set in step 5) // write
+- Client socket becomes available for reading (i.e. client sends a request to target). We read the data from the client
+  socket into the `to_target` buffer and then wait for the target socket to become available for writing so we can send
+  the request to the target.
 
-  // textual representations of ip/hostname:port for printing
-  char* client_hostport; (set in step 2)
-  char* target_hostport; (set in step 4)
+- Target socket becomes available for writing (i.e. we can now send the bytes we received from client to target). We
+  write the data in
+  `to_target` buffer to the target socket. After the write succeeds, wait to read from the client again.
 
-  // obtained from the CONNECT HTTP message
-  char* target_host; (set in step 3)
-  char* target_port; (set in step 3)
-  char* http_version; (set in step 3)
+__target-to-client direction__
 
-  // buffers for tunneling
-  struct tunnel_buffer to_target_buffer; (set in step 2)
-  struct tunnel_buffer to_client_buffer; (set in step 2)
+- Target socket becomes available for reading (i.e. target replies to client). We read the data from the target socket
+  into the
+  `to_client` buffer. Then, wait for the client socket to become available for writing so we can send the response to
+  the client.
 
-  // how many directions of this connection have been closed (0, 1, or 2)
-  int halves_closed;
+- Client socket becomes available for writing (i.e. we can now send the bytes we received from target to client), write
+  the data in
+  `to_client` buffer to the client socket. Then, wait to read from the target again.
 
-  // telemetry
-  bool telemetry_enabled; (set in step 2)
-  struct timespec started_at; (set in step 2)
-  unsigned long long n_bytes_streamed;
-};
-``` -->
+At any time, if either the client connection or the target connection is closed, we close the other connection as well
+and terminate the tunnel.
 
 ## External Libraries Used
 
