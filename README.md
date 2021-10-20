@@ -60,7 +60,7 @@ would create 150 new threads just to serve the homepage of a single website.
 
 It should be obvious that proxying network traffic is inherently an IO-bound task. The performance of the proxy heavily
 depends on how we handle IO in a scalable manner. To do this, we must abandon the blocking and synchronous programming
-paradigm and adopt signal-driven or asynchronous IO.
+paradigm and adopt **signal-driven** or **asynchronous IO**.
 
 Various operating systems provide tools for us to do this. The Linux kernel provides `select`, `poll`, and `epoll`, all
 of which are mechanisms for us to monitor a set of file descriptors to see if IO is possible on any of them. We inform
@@ -92,7 +92,7 @@ To solve this problem, we use a small external library `asyncaddrinfo` (link bel
 blocking `getaddrinfo` call in an asynchronous API. Internally, it uses a configurable number of worker threads to
 call `getaddrinfo` and gives us a file descriptor to receive the call result.
 
-We can conveniently add the file descriptor into our epoll instance and wait for its readability. This allows the thread
+We can conveniently add the file descriptor into our `epoll` instance and wait for its readability. This allows the thread
 to keep on serving other requests while `getaddrinfo` is being called concurrently.
 
 We allocate 25% of our threads to `asyncaddrinfo`, i.e., if we run with 8 threads, then 2 threads will be
@@ -190,6 +190,130 @@ __target-to-client direction__
 
 At any time, if either the client connection or the target connection is closed, we close the other connection as well
 and terminate the tunnel.
+
+## HTTP/1.0 vs HTTP/1.1
+
+## Experiment
+
+HTTP/1.0: telemetry when visiting `https://www.nus.edu.sg/`
+```
+Hostname: www.nus.edu.sg, Size: 59820 bytes, Time: 0.100 sec
+Hostname: www.nus.edu.sg, Size: 8657 bytes, Time: 0.063 sec
+Hostname: www.nus.edu.sg, Size: 4897 bytes, Time: 0.072 sec
+Hostname: www.nus.edu.sg, Size: 1600 bytes, Time: 0.072 sec
+Hostname: www.nus.edu.sg, Size: 1666 bytes, Time: 0.075 sec
+Hostname: www.nus.edu.sg, Size: 2262 bytes, Time: 0.076 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.082 sec
+Hostname: www.nus.edu.sg, Size: 8376 bytes, Time: 0.056 sec
+Hostname: www.nus.edu.sg, Size: 5812 bytes, Time: 0.050 sec
+Hostname: www.nus.edu.sg, Size: 36776 bytes, Time: 0.053 sec
+Hostname: www.nus.edu.sg, Size: 2143 bytes, Time: 0.056 sec
+Hostname: www.nus.edu.sg, Size: 3700 bytes, Time: 0.059 sec
+Hostname: www.nus.edu.sg, Size: 32541 bytes, Time: 0.068 sec
+Hostname: www.nus.edu.sg, Size: 2022 bytes, Time: 0.056 sec
+Hostname: www.nus.edu.sg, Size: 3148 bytes, Time: 0.050 sec
+Hostname: www.nus.edu.sg, Size: 1634 bytes, Time: 0.049 sec
+Hostname: www.nus.edu.sg, Size: 1689 bytes, Time: 0.049 sec
+Hostname: www.nus.edu.sg, Size: 1868 bytes, Time: 0.050 sec
+Hostname: www.nus.edu.sg, Size: 1746 bytes, Time: 0.050 sec
+Hostname: www.nus.edu.sg, Size: 4812 bytes, Time: 0.064 sec
+Hostname: www.nus.edu.sg, Size: 3487 bytes, Time: 0.065 sec
+Hostname: www.nus.edu.sg, Size: 19936 bytes, Time: 0.065 sec
+Hostname: www.nus.edu.sg, Size: 2651 bytes, Time: 0.087 sec
+Hostname: www.nus.edu.sg, Size: 20486 bytes, Time: 0.075 sec
+Hostname: www.nus.edu.sg, Size: 1344 bytes, Time: 0.038 sec
+Hostname: www.nus.edu.sg, Size: 24428 bytes, Time: 0.051 sec
+Hostname: www.nus.edu.sg, Size: 1656 bytes, Time: 0.047 sec
+Hostname: www.nus.edu.sg, Size: 78983 bytes, Time: 0.151 sec
+Hostname: www.nus.edu.sg, Size: 82169 bytes, Time: 0.131 sec
+Hostname: www.nus.edu.sg, Size: 48389 bytes, Time: 0.130 sec
+Hostname: www.nus.edu.sg, Size: 2735 bytes, Time: 0.260 sec
+Hostname: www.nus.edu.sg, Size: 158977 bytes, Time: 0.158 sec
+Hostname: www.nus.edu.sg, Size: 69908 bytes, Time: 0.119 sec
+Hostname: www.nus.edu.sg, Size: 59200 bytes, Time: 0.133 sec
+Hostname: www.nus.edu.sg, Size: 53005 bytes, Time: 0.113 sec
+Hostname: www.nus.edu.sg, Size: 49724 bytes, Time: 0.137 sec
+Hostname: fonts.googleapis.com, Size: 2218 bytes, Time: 0.109 sec
+Hostname: www.nus.edu.sg, Size: 2321 bytes, Time: 0.095 sec
+Hostname: www.nus.edu.sg, Size: 1113355 bytes, Time: 0.413 sec
+Hostname: www.nus.edu.sg, Size: 3923 bytes, Time: 0.097 sec
+Hostname: www.nus.edu.sg, Size: 2698 bytes, Time: 0.098 sec
+Hostname: www.nus.edu.sg, Size: 3920 bytes, Time: 0.096 sec
+Hostname: www.nus.edu.sg, Size: 2265 bytes, Time: 0.107 sec
+Hostname: www.nus.edu.sg, Size: 86677 bytes, Time: 0.148 sec
+Hostname: www.nus.edu.sg, Size: 39893 bytes, Time: 0.155 sec
+Hostname: www.nus.edu.sg, Size: 52156 bytes, Time: 0.157 sec
+Hostname: www.nus.edu.sg, Size: 109916 bytes, Time: 0.186 sec
+Hostname: www.nus.edu.sg, Size: 2227 bytes, Time: 0.085 sec
+Hostname: www.nus.edu.sg, Size: 1999090 bytes, Time: 0.702 sec
+Hostname: www.nus.edu.sg, Size: 2529 bytes, Time: 0.087 sec
+Hostname: www.nus.edu.sg, Size: 79441 bytes, Time: 0.129 sec
+Hostname: www.nus.edu.sg, Size: 45874 bytes, Time: 0.113 sec
+Hostname: www.nus.edu.sg, Size: 2376 bytes, Time: 0.036 sec
+Hostname: www.nus.edu.sg, Size: 4978 bytes, Time: 0.059 sec
+Hostname: www.nus.edu.sg, Size: 1289 bytes, Time: 0.038 sec
+Hostname: www.nus.edu.sg, Size: 728 bytes, Time: 0.236 sec
+Hostname: www.nus.edu.sg, Size: 1602 bytes, Time: 0.042 sec
+Hostname: www.nus.edu.sg, Size: 10608 bytes, Time: 0.042 sec
+Hostname: www.nus.edu.sg, Size: 10687 bytes, Time: 0.044 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.073 sec
+Hostname: www.nus.edu.sg, Size: 20011 bytes, Time: 0.062 sec
+Hostname: www.nus.edu.sg, Size: 20011 bytes, Time: 0.064 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.055 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.055 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.057 sec
+Hostname: www.nus.edu.sg, Size: 20008 bytes, Time: 0.058 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.054 sec
+Hostname: www.nus.edu.sg, Size: 20011 bytes, Time: 0.071 sec
+Hostname: www.nus.edu.sg, Size: 20011 bytes, Time: 0.067 sec
+Hostname: www.nus.edu.sg, Size: 20012 bytes, Time: 0.072 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.057 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.051 sec
+Hostname: www.nus.edu.sg, Size: 20012 bytes, Time: 0.055 sec
+Hostname: www.nus.edu.sg, Size: 20010 bytes, Time: 0.065 sec
+Hostname: news.nus.edu.sg, Size: 35108 bytes, Time: 0.991 sec
+Hostname: www.instagram.com, Size: 78974 bytes, Time: 115.955 sec
+Hostname: content.presspage.com, Size: 920012 bytes, Time: 115.651 sec
+Hostname: content.presspage.com, Size: 1078043 bytes, Time: 115.644 sec
+Hostname: content.presspage.com, Size: 1166283 bytes, Time: 115.870 sec
+Hostname: content.presspage.com, Size: 1617630 bytes, Time: 116.649 sec
+```
+
+HTTP/1.1: telemetry when visiting visit `https://www.nus.edu.sg/`
+```
+Hostname: news.nus.edu.sg, Size: 31460 bytes, Time: 5.836 sec
+Hostname: fonts.googleapis.com, Size: 2494 bytes, Time: 115.849 sec
+Hostname: www.nus.edu.sg, Size: 420236 bytes, Time: 116.040 sec
+Hostname: www.nus.edu.sg, Size: 381666 bytes, Time: 116.217 sec
+Hostname: www.nus.edu.sg, Size: 330840 bytes, Time: 116.048 sec
+Hostname: www.nus.edu.sg, Size: 134583 bytes, Time: 116.049 sec
+Hostname: www.instagram.com, Size: 78974 bytes, Time: 115.711 sec
+Hostname: www.nus.edu.sg, Size: 1253056 bytes, Time: 117.050 sec
+Hostname: www.nus.edu.sg, Size: 2123957 bytes, Time: 117.059 sec
+Hostname: content.presspage.com, Size: 919616 bytes, Time: 116.312 sec
+Hostname: content.presspage.com, Size: 1078060 bytes, Time: 116.311 sec
+Hostname: content.presspage.com, Size: 1616948 bytes, Time: 116.299 sec
+Hostname: content.presspage.com, Size: 1165799 bytes, Time: 116.307 sec
+```
+
+## Observations
+
+When visiting the same webpage with HTTP/1.0 and HTTP/1.1, page rendering is visibly slower for HTTP/1.0 compared to HTTP/1.1.
+
+As shown in the telemetry above, when using HTTP/1.0, 
+- there are much more tunnel connections established
+- there are many short-lived (< 0.2 seconds) tunnel connections with small byte transfer 
+whereas when HTTP/1.1,
+- there are much fewer tunnel connections established.
+- each connection has much higher byte transfer
+- most of the connections last for around 2 minutes 
+
+
+It is also worth noting that when using HTTP/1.0, there are still a small number of persistent connections. It turns out that these HTTP requests and responses include the "Connection: keep-alive" header, even it is not part of the HTTP/1.0 standard.
+
+## Explanation
+
+For HTTP/1.0, there is only one request and response for each TCP connection. However, for HTTP/1.1, it uses persistent connections by default, where multiple requests and responses can be sent over the same TCP connection. Hence, we observed more TCP connections established with short connection duration in the telemetry when running on HTTP/1.0. Also, without the overhead of multiple TCP connection setup and teardown, together with performance boost from request pipelining, the page load time is shorter with HTTP/1.1.
 
 ## External Libraries Used
 
