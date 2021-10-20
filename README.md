@@ -193,7 +193,7 @@ and terminate the tunnel.
 
 ## HTTP/1.0 vs HTTP/1.1
 
-## Experiment
+### Experiment
 
 HTTP/1.0: telemetry when visiting `https://www.nus.edu.sg/`
 ```
@@ -296,24 +296,21 @@ Hostname: content.presspage.com, Size: 1616948 bytes, Time: 116.299 sec
 Hostname: content.presspage.com, Size: 1165799 bytes, Time: 116.307 sec
 ```
 
-## Observations
-
-When visiting the same webpage with HTTP/1.0 and HTTP/1.1, page rendering is visibly slower for HTTP/1.0 compared to HTTP/1.1.
+### Observations
 
 As shown in the telemetry above, when using HTTP/1.0, 
 - there are much more tunnel connections established
 - there are many short-lived (< 0.2 seconds) tunnel connections with small byte transfer 
-whereas when HTTP/1.1,
-- there are much fewer tunnel connections established.
+whereas when using HTTP/1.1,
+- there are much fewer tunnel connections established
 - each connection has much higher byte transfer
 - most of the connections last for around 2 minutes 
 
-
 It is also worth noting that when using HTTP/1.0, there are still a small number of persistent connections. It turns out that these HTTP requests and responses include the "Connection: keep-alive" header, even it is not part of the HTTP/1.0 standard.
 
-## Explanation
+### Explanation
 
-For HTTP/1.0, there is only one request and response for each TCP connection. However, for HTTP/1.1, it uses persistent connections by default, where multiple requests and responses can be sent over the same TCP connection. Hence, we observed more TCP connections established with short connection duration in the telemetry when running on HTTP/1.0. Also, without the overhead of multiple TCP connection setup and teardown, together with performance boost from request pipelining, the page load time is shorter with HTTP/1.1.
+For HTTP/1.0, there is only one request and response for each TCP connection. However, for HTTP/1.1, it uses persistent connections by default, where multiple requests and responses can be sent over the same TCP connection. Hence, we observed more TCP connections established with short connection duration in the telemetry when running on HTTP/1.0.
 
 ## External Libraries Used
 
