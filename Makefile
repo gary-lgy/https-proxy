@@ -8,21 +8,22 @@ SRC_FILES = proxy.c http.c log.c util.c tunnel_conn.c \
 OUT_DIR = out
 BIN = proxy
 
-.PHONY: all debug_build candidate_build build clean
+.PHONY: all debug dev prod clean
 
-all: debug_build
+all: prod
 
-debug_build: clean
-	mkdir -p $(OUT_DIR)
+# Verbose logging, debug symbols
+debug: clean
 	$(CC) $(CFLAGS) -g -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
 
-candidate_build: clean
-	mkdir -p $(OUT_DIR)
+# Less verbose logging, -O2, no debug symbols
+dev: clean
 	$(CC) $(CFLAGS) -DNO_DEBUG_LOG -O2 -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
 
-build: clean
-	mkdir -p $(OUT_DIR)
+# No logging, -O2, no debug symbols
+prod: clean
 	$(CC) $(CFLAGS) -DNO_LOG -O2 -o $(OUT_DIR)/$(BIN) $(SRC_FILES) $(LFLAGS)
 
 clean:
 	rm -rf $(OUT_DIR)
+	mkdir -p $(OUT_DIR)
