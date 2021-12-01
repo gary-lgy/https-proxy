@@ -155,8 +155,9 @@ int main(int argc, char** argv) {
   char* endptr;
 
   unsigned short listening_port = strtol(argv[1], &endptr, 10);
-  if (*endptr != '\0') {
-    // the raw string contains unrecognized characters
+  if (*argv[1] == '\0'    // empty argument
+      || *endptr != '\0'  // unrecognized characters
+  ) {
     die(hsprintf("failed to parse port number '%s'", argv[1]));
   }
 
@@ -176,7 +177,7 @@ int main(int argc, char** argv) {
   unsigned short thread_count = DEFAULT_THREAD_COUNT;
   if (argc == 5) {
     thread_count = strtol(argv[4], &endptr, 10);
-    if (*endptr != '\0') {
+    if (*argv[4] == '\0' || *endptr != '\0') {
       die(hsprintf("failed to parse thread count '%s'", argv[4]));
     }
     if (thread_count < 2) {
