@@ -67,7 +67,7 @@ void handle_connections(struct proxy_server* server) {
 
 void* handle_connections_pthread_wrapper(void* raw_args) {
   struct connection_thread_args* args = raw_args;
-  thread_id__ = args->thread_id;  // for logging purpose
+  thread_id__ = args->thread_id;  // to identify the current thread in logging
   handle_connections(args->server);
   return NULL;
 }

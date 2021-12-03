@@ -52,7 +52,6 @@ void accept_incoming_connections(struct poll* p, struct proxy_server* server) {
   }
 }
 
-// TODO: abstract buffer io code
 /**
  * @param read_fd
  * @param buf

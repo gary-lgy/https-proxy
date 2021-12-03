@@ -105,7 +105,6 @@ int poll_run(struct poll* p) {
     }
 
     for (int i = 0; i < num_events; i++) {
-      // TODO: need to check for EPOLLERR?
       struct poll_task* task = events[i].data.ptr;
       task->callback(p, task->data);
       // If it's one-shot, this task will not be used again.
