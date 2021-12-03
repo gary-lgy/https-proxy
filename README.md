@@ -36,7 +36,7 @@ graph.facebook.com', etc.
 
 ```
 google
-facebook
+facebook.com
 ```
 
 ## Compile The Source Code
