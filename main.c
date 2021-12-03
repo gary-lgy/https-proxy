@@ -110,7 +110,7 @@ int read_blocklist(const char* blocklist_path, char*** blocklist_ptr) {
 
 int main(int argc, char** argv) {
   if (argc < 4 || argc > 5) {
-    die(hsprintf("Usage: %s port flag_telemetry path_to_blocklist [thread_count]", argv[0]));
+    die(hsprintf("Usage: %s port flag_stats path_to_blocklist [thread_count]", argv[0]));
   }
 
   char* endptr;
@@ -122,13 +122,13 @@ int main(int argc, char** argv) {
     die(hsprintf("failed to parse port number '%s'", argv[1]));
   }
 
-  bool telemetry_enabled;
+  bool stats_enabled;
   if (strcmp(argv[2], "0") == 0) {
-    telemetry_enabled = false;
+    stats_enabled = false;
   } else if (strcmp(argv[2], "1") == 0) {
-    telemetry_enabled = true;
+    stats_enabled = true;
   } else {
-    die(hsprintf("expected flag_telemetry to be either 0 or 1, got '%s'", argv[2]));
+    die(hsprintf("expected flag_stats to be either 0 or 1, got '%s'", argv[2]));
   }
 
   const char* blocklist_path = argv[3];
@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
   unsigned short connection_threads = thread_count - asyncaddrinfo_threads;
 
   printf("- listening port:                          %hu\n", listening_port);
-  printf("- telemetry enabled:                       %s\n", telemetry_enabled ? "yes" : "no");
+  printf("- stats enabled:                           %s\n", stats_enabled ? "yes" : "no");
   printf("- path to blocklist file:                  %s\n", blocklist_path);
   printf("- number of entries in the blocklist file: %d\n", blocklist_len);
   printf("- number of connection threads:            %hu\n", connection_threads);
@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
   int listening_socket = create_bind_listen(listening_port);
   struct proxy_server server = {
       .listening_socket = listening_socket,
-      .telemetry_enabled = telemetry_enabled,
+      .stats_enabled = stats_enabled,
       .blocklist = blocklist,
       .blocklist_len = blocklist_len,
   };

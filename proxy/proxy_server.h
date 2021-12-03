@@ -5,7 +5,7 @@
 
 struct proxy_server {
   int listening_socket;
-  bool telemetry_enabled;
+  bool stats_enabled;
   char** blocklist;
   int blocklist_len;
 };

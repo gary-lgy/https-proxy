@@ -5,7 +5,7 @@
 #include <time.h>
 #include <unistd.h>
 
-struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blocklist, int blocklist_len) {
+struct tunnel_conn* create_tunnel_conn(bool stats_enabled, char** blocklist, int blocklist_len) {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_socket = -1;
@@ -32,8 +32,8 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blocklist,
   conn->halves_closed = 0;
   conn->n_bytes_transferred = 0;
 
-  conn->telemetry_enabled = telemetry_enabled;
-  if (telemetry_enabled) {
+  conn->stats_enabled = stats_enabled;
+  if (stats_enabled) {
     timespec_get(&conn->started_at, TIME_UTC);
   }
 
@@ -44,8 +44,8 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blocklist,
   return conn;
 }
 
-void print_telemetry(struct tunnel_conn* conn) {
-  if (!conn->telemetry_enabled || conn->target_hostport[0] == '\0') {
+void print_stats(struct tunnel_conn* conn) {
+  if (!conn->stats_enabled || conn->target_hostport[0] == '\0') {
     return;
   }
 
@@ -62,7 +62,7 @@ void print_telemetry(struct tunnel_conn* conn) {
 }
 
 void destroy_tunnel_conn(struct tunnel_conn* conn) {
-  print_telemetry(conn);
+  print_stats(conn);
 
   if (conn->client_socket_dup >= 0) {
     close(conn->client_socket_dup);

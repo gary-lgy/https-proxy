@@ -17,13 +17,13 @@ The executable will be in `./out` directory.
 2. Start the proxy
 
 ```bash
-./out/proxy port flag_telemetry path_to_blocklist [thread_count]
+./out/proxy port enable_stats path_to_blocklist [thread_count]
 ```
 
 For example, to start the proxy with the following configurations,
 
 - listen on port 3000
-- enable telemetry
+- enable stats
 - use a blocklist file with name `blocklist.txt` in `./out` directory
 - use 8 threads
 
