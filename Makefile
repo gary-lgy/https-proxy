@@ -4,7 +4,7 @@ CFLAGS = -B/usr/bin/ -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
 LFLAGS = -lpthread
 SRC_FILES = main.c http.c log.c util.c poll.c \
             proxy/tunnel_conn.c proxy/accepted.c proxy/connecting.c proxy/tunneling.c \
-            lib/asyncaddrinfo/asyncaddrinfo.c \
+            lib/asyncaddrinfo/asyncaddrinfo.c
 OUT_DIR = out
 BIN = proxy
 
