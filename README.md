@@ -1,27 +1,31 @@
 # Transparent HTTPS Proxy
 
+This is a transparent HTTPS proxy written using Linux `epoll`. It acts as a TCP tunnel between a client and a target
+server and relays any data sent in either direction. Since it only speaks TCP and does not understand TLS/HTTP, it will
+not terminate TLS connections or modify HTTP requests.
+
 ## Setup
 
 1. Compile the source code
 
-```
-make build
+```bash
+make
 ```
 
 The executable will be in `./out` directory.
 
 2. Start the proxy
 
-```
-./out/proxy <port> <flag_telemetry> <path to blacklist file> [thread count]
+```bash
+./out/proxy port flag_telemetry path_to_blacklist_file [thread_count]
 ```
 
 For example, to start the proxy with the following configurations,
 
-- listening on port 3000
-- with telemetry enabled
-- a blacklist file with name `blacklist.txt` in `./out` directory
-- 8 threads are used
+- listen on port 3000
+- enable telemetry
+- use a blacklist file with name `blacklist.txt` in `./out` directory
+- use 8 threads
 
 run `./out/proxy 3000 1 out/blacklist.txt 8`
 
