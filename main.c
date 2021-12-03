@@ -14,7 +14,7 @@
 
 #define CONNECT_BACKLOG 512
 #define DEFAULT_THREAD_COUNT 8
-#define MAX_BLACKLIST_LEN 100
+#define MAX_BLOCKLIST_LEN 100
 
 int create_bind_listen(unsigned short port) {
   int listening_socket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
@@ -72,45 +72,45 @@ void* handle_connections_pthread_wrapper(void* raw_args) {
   return NULL;
 }
 
-int read_blacklist(const char* blacklist_path, char*** blacklist_ptr) {
-  char** blacklist = *blacklist_ptr = calloc(MAX_BLACKLIST_LEN, sizeof(char*));
+int read_blocklist(const char* blocklist_path, char*** blocklist_ptr) {
+  char** blocklist = *blocklist_ptr = calloc(MAX_BLOCKLIST_LEN, sizeof(char*));
 
-  FILE* fp = fopen(blacklist_path, "r");
+  FILE* fp = fopen(blocklist_path, "r");
   if (fp == NULL) {
-    die(hsprintf("could not open file: '%s'", blacklist_path));
+    die(hsprintf("could not open file: '%s'", blocklist_path));
   }
 
   size_t buffer_len = 0;
-  int blacklist_len = 0;
+  int blocklist_len = 0;
 
   while (1) {
-    if (blacklist_len >= MAX_BLACKLIST_LEN) {
-      die("too many entries in the blacklist. Only up to 100 is supported.");
+    if (blocklist_len >= MAX_BLOCKLIST_LEN) {
+      die("too many entries in the blocklist. Only up to 100 is supported.");
     }
 
-    if (getline(&blacklist[blacklist_len], &buffer_len, fp) == -1) {
-      free(blacklist[blacklist_len]);
+    if (getline(&blocklist[blocklist_len], &buffer_len, fp) == -1) {
+      free(blocklist[blocklist_len]);
       break;
     }
 
-    size_t char_count = strcspn(blacklist[blacklist_len], "\r\n");
+    size_t char_count = strcspn(blocklist[blocklist_len], "\r\n");
     if (char_count == 0) {
       // empty line
       continue;
     }
-    blacklist[blacklist_len][char_count] = '\0';
-    DEBUG_LOG("Read blacklist entry %d: %s", blacklist_len, blacklist[blacklist_len]);
-    blacklist_len++;
+    blocklist[blocklist_len][char_count] = '\0';
+    DEBUG_LOG("Read blocklist entry %d: %s", blocklist_len, blocklist[blocklist_len]);
+    blocklist_len++;
   }
 
   fclose(fp);
 
-  return blacklist_len;
+  return blocklist_len;
 }
 
 int main(int argc, char** argv) {
   if (argc < 4 || argc > 5) {
-    die(hsprintf("Usage: %s <port> <flag_telemetry> <path to blacklist file> [thread count]", argv[0]));
+    die(hsprintf("Usage: %s port flag_telemetry path_to_blocklist [thread_count]", argv[0]));
   }
 
   char* endptr;
@@ -131,9 +131,9 @@ int main(int argc, char** argv) {
     die(hsprintf("expected flag_telemetry to be either 0 or 1, got '%s'", argv[2]));
   }
 
-  const char* blacklist_path = argv[3];
-  char** blacklist;
-  int blacklist_len = read_blacklist(blacklist_path, &blacklist);
+  const char* blocklist_path = argv[3];
+  char** blocklist;
+  int blocklist_len = read_blocklist(blocklist_path, &blocklist);
 
   unsigned short thread_count = DEFAULT_THREAD_COUNT;
   if (argc == 5) {
@@ -156,8 +156,8 @@ int main(int argc, char** argv) {
 
   printf("- listening port:                          %hu\n", listening_port);
   printf("- telemetry enabled:                       %s\n", telemetry_enabled ? "yes" : "no");
-  printf("- path to blacklist file:                  %s\n", blacklist_path);
-  printf("- number of entries in the blacklist file: %d\n", blacklist_len);
+  printf("- path to blocklist file:                  %s\n", blocklist_path);
+  printf("- number of entries in the blocklist file: %d\n", blocklist_len);
   printf("- number of connection threads:            %hu\n", connection_threads);
   printf("- number of async addrinfo (DNS) threads:  %hu\n", asyncaddrinfo_threads);
 
@@ -169,8 +169,8 @@ int main(int argc, char** argv) {
   struct proxy_server server = {
       .listening_socket = listening_socket,
       .telemetry_enabled = telemetry_enabled,
-      .blacklist = blacklist,
-      .blacklist_len = blacklist_len,
+      .blocklist = blocklist,
+      .blocklist_len = blocklist_len,
   };
 
   struct connection_thread_args args_list[connection_threads];
@@ -204,10 +204,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  for (int i = 0; i < blacklist_len; i++) {
-    free(blacklist[i]);
+  for (int i = 0; i < blocklist_len; i++) {
+    free(blocklist[i]);
   }
-  free(blacklist);
+  free(blocklist);
 
   asyncaddrinfo_cleanup();
 

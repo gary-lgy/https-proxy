@@ -6,8 +6,8 @@
 struct proxy_server {
   int listening_socket;
   bool telemetry_enabled;
-  char** blacklist;
-  int blacklist_len;
+  char** blocklist;
+  int blocklist_len;
 };
 
 void accept_incoming_connections(struct poll* p, struct proxy_server* server);

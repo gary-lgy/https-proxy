@@ -88,13 +88,13 @@ struct tunnel_conn {
   struct timespec started_at;
   unsigned long long n_bytes_transferred;
 
-  // blacklist
-  char** blacklist;
-  int blacklist_len;
+  // blocklist
+  char** blocklist;
+  int blocklist_len;
   bool is_blocked;
 };
 
-struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist, int blacklist_len);
+struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blocklist, int blocklist_len);
 void destroy_tunnel_conn(struct tunnel_conn* conn);
 void set_client_hostport(struct tunnel_conn*, const struct sockaddr_in*);
 void set_target_hostport(struct tunnel_conn*);

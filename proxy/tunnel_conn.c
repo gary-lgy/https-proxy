@@ -5,7 +5,7 @@
 #include <time.h>
 #include <unistd.h>
 
-struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist, int blacklist_len) {
+struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blocklist, int blocklist_len) {
   struct tunnel_conn* conn = calloc(1, sizeof(struct tunnel_conn));
 
   conn->client_socket = -1;
@@ -37,8 +37,8 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist,
     timespec_get(&conn->started_at, TIME_UTC);
   }
 
-  conn->blacklist = blacklist;
-  conn->blacklist_len = blacklist_len;
+  conn->blocklist = blocklist;
+  conn->blocklist_len = blocklist_len;
   conn->is_blocked = false;
 
   return conn;

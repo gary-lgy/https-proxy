@@ -14,7 +14,7 @@ accepted ---> [*] : received invalid CONNECT message ||\n client connection clos
 
 connecting : resolve the target hostname to IP address and \n try to establish TCP connection to target
 
-connecting ---> [*] : hostname blacklisted ||\nfailed to connect to target /\nsend 404 response to client and close client connection
+connecting ---> [*] : hostname blocked ||\nfailed to connect to target /\nsend 404 response to client and close client connection
 
 state tunneling {
 

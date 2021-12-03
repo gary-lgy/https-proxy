@@ -209,14 +209,14 @@ void start_connecting_to_target(struct poll* p, struct tunnel_conn* conn) {
   struct connecting_data_block* data_block = malloc(sizeof(struct connecting_data_block));
   data_block->conn = conn;
 
-  // Check blacklist
-  // To handle large blacklists, we should use a specialised string matching algorithm e.g. Aho-Corasick
-  char** blacklist = conn->blacklist;
-  int blacklist_len = conn->blacklist_len;
-  for (int i = 0; i < blacklist_len; i++) {
-    if (strstr(conn->target_host, blacklist[i]) != NULL) {
+  // Check blocklist
+  // To handle large blocklists, we should use a specialised string matching algorithm e.g. Aho-Corasick
+  char** blocklist = conn->blocklist;
+  int blocklist_len = conn->blocklist_len;
+  for (int i = 0; i < blocklist_len; i++) {
+    if (strstr(conn->target_host, blocklist[i]) != NULL) {
       conn->is_blocked = true;
-      LOG("block target: '%s' as it matches '%s'", data_block->conn->target_host, blacklist[i]);
+      LOG("block target: '%s' as it matches '%s'", data_block->conn->target_host, blocklist[i]);
       reject_client_request(p, data_block->conn);
       free(data_block);
       return;

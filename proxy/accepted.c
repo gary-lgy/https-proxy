@@ -33,7 +33,7 @@ void accept_incoming_connections(struct poll* p, struct proxy_server* server) {
       }
     }
 
-    struct tunnel_conn* conn = create_tunnel_conn(server->telemetry_enabled, server->blacklist, server->blacklist_len);
+    struct tunnel_conn* conn = create_tunnel_conn(server->telemetry_enabled, server->blocklist, server->blocklist_len);
     conn->client_socket = client_socket;
     set_client_hostport(conn, &client_addr);
 

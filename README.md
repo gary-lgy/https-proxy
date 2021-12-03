@@ -17,19 +17,19 @@ The executable will be in `./out` directory.
 2. Start the proxy
 
 ```bash
-./out/proxy port flag_telemetry path_to_blacklist_file [thread_count]
+./out/proxy port flag_telemetry path_to_blocklist [thread_count]
 ```
 
 For example, to start the proxy with the following configurations,
 
 - listen on port 3000
 - enable telemetry
-- use a blacklist file with name `blacklist.txt` in `./out` directory
+- use a blocklist file with name `blocklist.txt` in `./out` directory
 - use 8 threads
 
-run `./out/proxy 3000 1 out/blacklist.txt 8`
+run `./out/proxy 3000 1 out/blocklist.txt 8`
 
-Note: The default number of threads is 8 if `thread count` is not specified. At least 2 threads are required (the reason
+Note: The default number of threads is 8 if `thread_count` is not specified. At least 2 threads are required (the reason
 for this is explained later).
 
 3. Connect to SoC VPN (because `xcne1` and `xcne2` are not publicly accessible)
