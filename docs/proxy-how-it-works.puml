@@ -1,0 +1,21 @@
+@startuml
+
+skinparam sequenceMessageAlign center
+
+Client <-> Proxy: TCP handshake
+
+Client -> Proxy: CONNECT google.com:443 HTTP/1.1
+
+Proxy -> Proxy: resolve google.com to IP
+
+Proxy <-> Target: TCP handshake
+
+Proxy -> Client: HTTP/1.1 200 Connection established
+Proxy -[hidden]> Target: paaaaaaaaaaaaaaaaaaaaaaaaaaadding
+
+loop until either client or target closes TCP connection
+Client <-> Target: tunnel
+end
+
+|||
+@enduml
