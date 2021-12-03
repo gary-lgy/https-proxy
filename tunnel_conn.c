@@ -30,7 +30,7 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist,
   conn->to_client_buffer.write_ptr = buffer;
 
   conn->halves_closed = 0;
-  conn->n_bytes_streamed = 0;
+  conn->n_bytes_transferred = 0;
 
   conn->telemetry_enabled = telemetry_enabled;
   if (telemetry_enabled) {
@@ -53,7 +53,7 @@ void destroy_tunnel_conn(struct tunnel_conn* conn) {
     printf(
         "Hostname: %s, Size: %llu bytes, Time: %.3f sec\n",
         conn->target_host,
-        conn->n_bytes_streamed,
+        conn->n_bytes_transferred,
         milliseconds_elapsed / 1000.0);
   }
 

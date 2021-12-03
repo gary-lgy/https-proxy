@@ -5,239 +5,229 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/epoll.h>
 #include <unistd.h>
 #include "../http.h"
 #include "../lib/asyncaddrinfo/asyncaddrinfo.h"
 #include "../log.h"
+#include "../poll.h"
 #include "../util.h"
 #include "epoll_cb.h"
 
-void fail_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
-  cb->failed = true;
+// Information for a connection that is in the process of connecting to the target
+struct connecting_data_block {
+  struct tunnel_conn* conn;
+  int asyncaddrinfo_fd;
+  struct addrinfo* host_addrs;
+  struct addrinfo* next_addr;
+  int target_sock;
+};
 
-  // Send HTTP 4xx to client
-  int n_bytes = sprintf(cb->conn->to_client_buffer.start, "%s 400 Bad Request \r\n\r\n", cb->conn->http_version);
-  cb->conn->to_client_buffer.write_ptr += n_bytes;
+void send_rejection_response_to_client(struct poll* p, struct tunnel_conn* conn);
 
-  struct epoll_event event;
-  event.events = EPOLLOUT | EPOLLONESHOT;
-  event.data.ptr = cb;
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->conn->client_socket, &event) < 0) {
+void prepare_rejection_response(struct tunnel_conn* conn) {
+  int n_bytes = sprintf(conn->to_client_buffer.start, "%s 400 Bad Request \r\n\r\n", conn->http_version);
+  conn->to_client_buffer.write_ptr += n_bytes;
+}
+
+void wait_to_send_rejection_response_to_client(struct poll* p, struct tunnel_conn* conn) {
+  if (poll_wait_for_writability(
+          p, conn->client_socket, conn, true, false, (poll_callback)send_rejection_response_to_client) < 0) {
     char* error_desc = errno2s(errno);
     DEBUG_LOG(
-        "failed to add client_socket of %s to epoll for writing 4xx response: %s",
-        cb->conn->client_hostport,
+        "failed to add client_socket of %s to poll instance for writing 4xx response: %s",
+        conn->client_hostport,
         error_desc);
     free(error_desc);
 
-    destroy_tunnel_conn(cb->conn);
-    free(cb);
+    destroy_tunnel_conn(conn);
   }
 }
 
-void init_connection_to_target(int epoll_fd, struct epoll_connecting_cb* cb) {
-  for (; cb->next_addr != NULL; cb->next_addr = cb->next_addr->ai_next) {
-    int sock = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
-    if (sock < 0) {
-      continue;
-    }
-
-    if (connect(sock, cb->next_addr->ai_addr, sizeof(struct sockaddr_in)) == 0 || errno == EAGAIN ||
-        errno == EINPROGRESS) {
-      // we're connected or connecting to the current address
-      cb->next_addr = cb->next_addr->ai_next;
-      cb->target_sock = sock;
-
-      struct epoll_event event;
-      event.events = EPOLLOUT | EPOLLONESHOT;
-      event.data.ptr = cb;
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->target_sock, &event) < 0) {
-        char* error_desc = errno2s(errno);
-        DEBUG_LOG("failed to add target socket into epoll: %s", error_desc);
-        free(error_desc);
-
-        freeaddrinfo(cb->host_addrs);
-        destroy_tunnel_conn(cb->conn);
-        close(sock);
-        free(cb);
-      }
-      return;
-    }
-
-    // some unexpected error, try the next address
-    close(sock);
-  }
-
-  // none of the addresses work
-  LOG("failed to connect to target %s: no more addresses to try", cb->conn->target_hostport);
-  freeaddrinfo(cb->host_addrs);
-  fail_connecting_cb(epoll_fd, cb);
-}
-
-int submit_hostname_lookup(int epoll_fd, struct epoll_connecting_cb* cb, const char* hostname, const char* port) {
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(struct addrinfo));
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_protocol = IPPROTO_TCP;
-
-  cb->asyncaddrinfo_fd = asyncaddrinfo_resolve(hostname, port, &hints);
-
-  struct epoll_event event;
-  event.events = EPOLLIN | EPOLLONESHOT;
-  event.data.ptr = cb;
-
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cb->asyncaddrinfo_fd, &event) < 0) {
-    char* error_desc = errno2s(errno);
-    DEBUG_LOG(
-        "failed to add asyncaddrinfo_fd for (%s) -> (%s) into epoll: %s",
-        cb->conn->client_hostport,
-        cb->conn->target_hostport,
-        error_desc);
-    free(error_desc);
-    close(cb->asyncaddrinfo_fd);
-    return -1;
-  }
-
-  return 0;
-}
-
-void enter_connecting_state(int epoll_fd, struct tunnel_conn* conn) {
-  struct epoll_connecting_cb* cb = malloc(sizeof(struct epoll_connecting_cb));
-  cb->type = cb_type_connecting;
-  cb->conn = conn;
-  cb->failed = false;
-
-  // Check blacklist
-  char** blacklist = conn->blacklist;
-  int blacklist_len = conn->blacklist_len;
-  for (int i = 0; i < blacklist_len; i++) {
-    if (strstr(conn->target_host, blacklist[i]) != NULL) {
-      conn->is_blocked = true;
-      fail_connecting_cb(epoll_fd, cb);
-      LOG("block target: '%s' as it matches '%s'", cb->conn->target_host, blacklist[i]);
-      return;
-    }
-  }
-
-  if (submit_hostname_lookup(epoll_fd, cb, conn->target_host, conn->target_port) < 0) {
-    fail_connecting_cb(epoll_fd, cb);
-    return;
-  }
-}
-
-void handle_failed_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb) {
-  struct tunnel_buffer* buf = &cb->conn->to_client_buffer;
+void send_rejection_response_to_client(struct poll* p, struct tunnel_conn* conn) {
+  struct tunnel_buffer* buf = &conn->to_client_buffer;
   size_t n_bytes_to_send = buf->write_ptr - buf->read_ptr;
 
   if (n_bytes_to_send <= 0) {
     die(hsprintf(
         "going to send 4xx response for tunnel (%s) -> (%s), but the buf is empty; this should not happen",
-        cb->conn->client_hostport,
-        cb->conn->target_hostport));
+        conn->client_hostport,
+        conn->target_hostport));
   }
 
-  ssize_t n_bytes_sent = send(cb->conn->client_socket, buf->read_ptr, n_bytes_to_send, MSG_NOSIGNAL);
+  ssize_t n_bytes_sent = send(conn->client_socket, buf->read_ptr, n_bytes_to_send, MSG_NOSIGNAL);
 
   if (n_bytes_sent < 0) {
     // teardown the entire connection
     char* error_desc = errno2s(errno);
-    LOG("failed to write 4xx response for (%s) -> (%s): %s",
-        cb->conn->client_hostport,
-        cb->conn->target_hostport,
-        error_desc);
+    LOG("failed to write 4xx response for (%s) -> (%s): %s", conn->client_hostport, conn->target_hostport, error_desc);
     free(error_desc);
 
-    destroy_tunnel_conn(cb->conn);
-    free(cb);
+    destroy_tunnel_conn(conn);
     return;
   }
 
   DEBUG_LOG(
       "sent %d bytes of 4xx response to client of (%s) -> (%s)",
       n_bytes_sent,
-      cb->conn->client_hostport,
-      cb->conn->target_hostport);
+      conn->client_hostport,
+      conn->target_hostport);
 
   buf->read_ptr += n_bytes_sent;
 
   if (buf->read_ptr >= buf->write_ptr) {
     // all bytes sent
-    destroy_tunnel_conn(cb->conn);
-    free(cb);
-    return;
-  }
-
-  // still some bytes left, wait to send again
-  struct epoll_event event;
-  event.events = EPOLLOUT | EPOLLONESHOT;
-  event.data.ptr = cb;
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cb->conn->client_socket, &event) < 0) {
-    char* error_desc = errno2s(errno);
-    DEBUG_LOG(
-        "failed to add client_socket of %s to epoll for writing 4xx response: %s",
-        cb->conn->client_hostport,
-        error_desc);
-    free(error_desc);
-
-    destroy_tunnel_conn(cb->conn);
-    free(cb);
+    destroy_tunnel_conn(conn);
+  } else {
+    // still some bytes left, wait to send again
+    wait_to_send_rejection_response_to_client(p, conn);
   }
 }
 
-void handle_connecting_cb(int epoll_fd, struct epoll_connecting_cb* cb, uint32_t events) {
-  if (events & EPOLLERR) {
-    DEBUG_LOG(
-        "epoll reported error on tunnel connection (%s) -> (%s) in connecting state",
-        cb->conn->client_hostport,
-        cb->conn->target_hostport);
-  }
+void reject_client_request(struct poll* p, struct tunnel_conn* conn) {
+  prepare_rejection_response(conn);
+  wait_to_send_rejection_response_to_client(p, conn);
+}
 
-  // after connection failure, we send 4xx response to client
-  if (cb->failed) {
-    handle_failed_connecting_cb(epoll_fd, cb);
+void handle_connection_completed(struct poll* p, struct connecting_data_block* data_block);
+
+void connect_to_target(struct poll* p, struct connecting_data_block* data_block) {
+  // try all addresses
+  for (; data_block->next_addr != NULL; data_block->next_addr = data_block->next_addr->ai_next) {
+    int sock = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+    if (sock < 0) {
+      continue;
+    }
+
+    if (connect(sock, data_block->next_addr->ai_addr, sizeof(struct sockaddr_in)) != 0 && errno != EAGAIN &&
+        errno != EINPROGRESS) {
+      // connect failed
+      close(sock);
+      continue;
+    }
+
+    data_block->target_sock = sock;
+
+    // wait until the connection is successful by waiting for writability on the socket
+    if (poll_wait_for_writability(p, sock, data_block, true, false, (poll_callback)handle_connection_completed) < 0) {
+      // cannot add the socket to the poll instance for some reason
+      char* error_desc = errno2s(errno);
+      DEBUG_LOG("failed to add target socket into epoll: %s", error_desc);
+      free(error_desc);
+
+      close(sock);
+      continue;
+    }
+
+    // we're connecting to the current address
+    data_block->next_addr = data_block->next_addr->ai_next;
     return;
   }
 
-  // we're either waiting for asyncaddrinfo lookup result or connection to target to complete
-  // for the former, we are waiting for EPOLLIN, and for the latter, we are waiting for EPOLLOUT
-  if (events & EPOLLIN) {
-    // asyncaddrinfo result came back
-    int gai_errno = asyncaddrinfo_result(cb->asyncaddrinfo_fd, &cb->host_addrs);
-    if (gai_errno != 0) {
-      LOG("host resolution for (%s) -> (%s) failed: %s",
-          cb->conn->client_hostport,
-          cb->conn->target_hostport,
-          gai_strerror(gai_errno));
-      fail_connecting_cb(epoll_fd, cb);
+  // none of the addresses work
+  LOG("failed to connect to target %s: no more addresses to try", data_block->conn->target_hostport);
+  freeaddrinfo(data_block->host_addrs);
+  reject_client_request(p, data_block->conn);
+  free(data_block);
+}
+
+void handle_connection_completed(struct poll* p, struct connecting_data_block* data_block) {
+  // connection succeeded or failed
+  struct sockaddr_in addr;
+  socklen_t addrlen = sizeof(addr);
+  if (getpeername(data_block->target_sock, &addr, &addrlen) < 0) {
+    // connection failed; try connecting with another address
+    shutdown(data_block->target_sock, SHUT_RDWR);
+    close(data_block->target_sock);
+    connect_to_target(p, data_block);
+  } else {
+    // connection succeeded
+    data_block->conn->target_socket = data_block->target_sock;
+    LOG("connected to %s", data_block->conn->target_hostport);
+
+    freeaddrinfo(data_block->host_addrs);
+    start_tunneling(p, data_block->conn);
+    free(data_block);
+  }
+}
+
+void handle_asyncaddrinfo_resolve_readability(struct poll* p, struct connecting_data_block* data_block) {
+  int gai_errno = asyncaddrinfo_result(data_block->asyncaddrinfo_fd, &data_block->host_addrs);
+  if (gai_errno != 0) {
+    LOG("host resolution for (%s) -> (%s) failed: %s",
+        data_block->conn->client_hostport,
+        data_block->conn->target_hostport,
+        gai_strerror(gai_errno));
+    reject_client_request(p, data_block->conn);
+    free(data_block);
+    return;
+  }
+
+  data_block->asyncaddrinfo_fd = -1;
+  LOG("host resolution succeeded for (%s) -> (%s)",
+      data_block->conn->client_hostport,
+      data_block->conn->target_hostport);
+
+  // start connecting
+  data_block->next_addr = data_block->host_addrs;
+  connect_to_target(p, data_block);
+}
+
+int submit_hostname_lookup(
+    struct poll* p,
+    struct connecting_data_block* data_block,
+    const char* hostname,
+    const char* port) {
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+
+  data_block->asyncaddrinfo_fd = asyncaddrinfo_resolve(hostname, port, &hints);
+
+  if (poll_wait_for_readability(
+          p,
+          data_block->asyncaddrinfo_fd,
+          data_block,
+          true,
+          false,
+          (poll_callback)handle_asyncaddrinfo_resolve_readability) < 0) {
+    char* error_desc = errno2s(errno);
+    DEBUG_LOG(
+        "failed to add asyncaddrinfo_fd for (%s) -> (%s) into epoll: %s",
+        data_block->conn->client_hostport,
+        data_block->conn->target_hostport,
+        error_desc);
+    free(error_desc);
+    close(data_block->asyncaddrinfo_fd);
+    return -1;
+  }
+
+  return 0;
+}
+
+void start_connecting_to_target(struct poll* p, struct tunnel_conn* conn) {
+  struct connecting_data_block* data_block = malloc(sizeof(struct connecting_data_block));
+  data_block->conn = conn;
+
+  // Check blacklist
+  // TODO: move blacklist handling to server state
+  // To handle large blacklists, we should use a specialised string matching algorithm e.g. Aho-Corasick
+  char** blacklist = conn->blacklist;
+  int blacklist_len = conn->blacklist_len;
+  for (int i = 0; i < blacklist_len; i++) {
+    if (strstr(conn->target_host, blacklist[i]) != NULL) {
+      conn->is_blocked = true;
+      LOG("block target: '%s' as it matches '%s'", data_block->conn->target_host, blacklist[i]);
+      reject_client_request(p, data_block->conn);
+      free(data_block);
       return;
     }
-    cb->asyncaddrinfo_fd = -1;
+  }
 
-    LOG("host resolution succeeded for (%s) -> (%s)", cb->conn->client_hostport, cb->conn->target_hostport);
-
-    // start connecting
-    cb->next_addr = cb->host_addrs;
-    init_connection_to_target(epoll_fd, cb);
-  } else {
-    // connection succeeded or failed
-    struct sockaddr_in addr;
-    socklen_t addrlen = sizeof(addr);
-    if (getpeername(cb->target_sock, &addr, &addrlen) < 0) {
-      // connection failed; try connecting with another address
-      shutdown(cb->target_sock, SHUT_RDWR);
-      close(cb->target_sock);
-      init_connection_to_target(epoll_fd, cb);
-    } else {
-      // connection succeeded
-      cb->conn->target_socket = cb->target_sock;
-      LOG("connected to %s", cb->conn->target_hostport);
-
-      enter_tunneling_state(epoll_fd, cb->conn);
-
-      freeaddrinfo(cb->host_addrs);
-      free(cb);
-    }
+  if (submit_hostname_lookup(p, data_block, conn->target_host, conn->target_port) < 0) {
+    reject_client_request(p, conn);
+    free(data_block);
+    return;
   }
 }

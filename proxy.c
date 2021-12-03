@@ -9,11 +9,12 @@
 #include <unistd.h>
 #include "lib/asyncaddrinfo/asyncaddrinfo.h"
 #include "log.h"
+#include "poll.h"
+#include "proxy_server.h"
 #include "states/epoll_cb.h"
 #include "util.h"
 
 #define CONNECT_BACKLOG 512
-#define EPOLL_MAX_EVENTS 64
 #define DEFAULT_THREAD_COUNT 8
 #define MAX_BLACKLIST_LEN 100
 
@@ -39,75 +40,37 @@ int create_bind_listen(unsigned short port) {
   return listening_socket;
 }
 
-struct event_loop_args {
+struct connection_thread_args {
   unsigned short thread_id;
-  bool telemetry_enabled;
-  int listening_socket;
-  char** blacklist;
-  int blacklist_len;
+  struct proxy_server* config;
 };
 
-void handle_connections_in_event_loop(struct event_loop_args* args) {
-  int epoll_fd = epoll_create1(0);
-  if (epoll_fd < 0) {
-    die(hsprintf("failed to create epoll instance: %s", errno2s(errno)));
+void handle_connections(struct proxy_server* server) {
+  struct poll* p = poll_create();
+  if (p == NULL) {
+    die(hsprintf("failed to create poll instance: %s", errno2s(errno)));
   }
 
-  struct epoll_event event, events[EPOLL_MAX_EVENTS];
-
-  // Configure `event.data.ptr` to be NULL when there are events on listening socket
-  event.data.ptr = NULL;
   // Since we will call `accept4` until there are no more incoming connections,
-  // and edge-triggered is more efficient than level-triggered,
-  // we can register edge-triggered notification for read events on the listening socket
-  event.events = EPOLLIN | EPOLLET;
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, args->listening_socket, &event) < 0) {
-    die(hsprintf("failed to add listening socket %d into epoll: %s", args->listening_socket, errno2s(errno)));
+  // we can register edge-triggered notification for read events on the listening socket.
+  // Edge-triggered is more efficient than level-triggered.
+  if (poll_wait_for_readability(
+          p, server->listening_socket, server, false, true, (poll_callback)accept_incoming_connections) < 0) {
+    die(hsprintf("failed to register readability notification for listening socket: %s", errno2s(errno)));
   }
 
-  // event loop
-  while (1) {
-    int num_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
-    DEBUG_LOG("epoll_wait returned %d", num_events);
-    if (num_events < 0) {
-      die(hsprintf("epoll_wait error: %s", errno2s(errno)));
-    }
-
-    for (int i = 0; i < num_events; i++) {
-      if (events[i].data.ptr == NULL) {
-        // events on listening socket
-        if (events[i].events & EPOLLERR) {
-          DEBUG_LOG("epoll reported error on listening socket");
-        }
-        if (!(events[i].events & EPOLLIN)) {
-          DEBUG_LOG("listening socket is not readable but epoll woke us up anyway");
-          continue;
-        }
-        accept_incoming_connections(
-            epoll_fd, args->listening_socket, args->telemetry_enabled, args->blacklist, args->blacklist_len);
-      } else {
-        // events on existing connection
-        struct epoll_cb* cb = events[i].data.ptr;
-        if (cb->type == cb_type_accepted) {
-          handle_accepted_cb(epoll_fd, (struct epoll_accepted_cb*)cb, events[i].events);
-        } else if (cb->type == cb_type_connecting) {
-          handle_connecting_cb(epoll_fd, (struct epoll_connecting_cb*)cb, events[i].events);
-        } else if (cb->type == cb_type_tunneling) {
-          handle_tunneling_cb(epoll_fd, (struct epoll_tunneling_cb*)cb, events[i].events);
-        }
-      }
-    }
+  // start the event loop and run until termination
+  if (poll_run(p) < 0) {
+    die(hsprintf("poll_run returned error: %s", errno2s(errno)));
   }
 
-  if (close(epoll_fd) < 0) {
-    die(hsprintf("failed to close epoll instance: %s", errno2s(errno)));
-  }
+  poll_destroy(p);
 }
 
-void* handle_connections_in_event_loop_pthread_wrapper(void* raw_args) {
-  struct event_loop_args* args = raw_args;
+void* handle_connections_pthread_wrapper(void* raw_args) {
+  struct connection_thread_args* args = raw_args;
   thread_id__ = args->thread_id;  // for logging purpose
-  handle_connections_in_event_loop(args);
+  handle_connections(args->config);
   return NULL;
 }
 
@@ -200,33 +163,37 @@ int main(int argc, char** argv) {
   printf("- number of connection threads:            %hu\n", connection_threads);
   printf("- number of async addrinfo (DNS) threads:  %hu\n", asyncaddrinfo_threads);
 
-  int listening_socket = create_bind_listen(listening_port);
-
   // start the addr info lookup threads
   asyncaddrinfo_init(asyncaddrinfo_threads);
 
   // start the connection threads
-  struct event_loop_args args_list[connection_threads];
+  // TODO: should this struct be server or config?
+  int listening_socket = create_bind_listen(listening_port);
+  struct proxy_server server = {
+      .listening_socket = listening_socket,
+      .telemetry_enabled = telemetry_enabled,
+      .blacklist = blacklist,
+      .blacklist_len = blacklist_len,
+  };
+
+  struct connection_thread_args args_list[connection_threads];
   for (int i = 0; i < connection_threads; i++) {
-    args_list[i].listening_socket = listening_socket;
-    args_list[i].telemetry_enabled = telemetry_enabled;
     args_list[i].thread_id = i;
-    args_list[i].blacklist = blacklist;
-    args_list[i].blacklist_len = blacklist_len;
+    args_list[i].config = &server;
   }
 
   pthread_t workers[connection_threads - 1];
   for (int i = 0; i < connection_threads - 1; i++) {
     // child threads will have id from 1 onwards
     // the main thread will be thread 0
-    if (0 != pthread_create(&workers[i], NULL, handle_connections_in_event_loop_pthread_wrapper, &args_list[i + 1])) {
+    if (0 != pthread_create(&workers[i], NULL, handle_connections_pthread_wrapper, &args_list[i + 1])) {
       die(hsprintf("error creating thread %d: %s", i + 1, errno2s(errno)));
     }
   }
 
   printf("Accepting requests\n");
   // run another event loop on the main thread
-  handle_connections_in_event_loop_pthread_wrapper(&args_list[0]);
+  handle_connections_pthread_wrapper(&args_list[0]);
 
   // We will never reach here, the cleanup code below is just for completeness' sake
 

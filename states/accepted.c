@@ -3,24 +3,23 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/epoll.h>
 #include <unistd.h>
 #include "../http.h"
 #include "../log.h"
+#include "../poll.h"
+#include "../proxy_server.h"
 #include "../util.h"
 #include "epoll_cb.h"
 
-void accept_incoming_connections(
-    int epoll_fd,
-    int listening_socket,
-    bool telemetry_enabled,
-    char** blacklist,
-    int blacklist_len) {
+void handle_client_connect_request_readability(struct poll* p, struct tunnel_conn* conn);
+
+void accept_incoming_connections(struct poll* p, struct proxy_server* server) {
+  // accept all pending connections
   while (1) {
     struct sockaddr_in client_addr;
     socklen_t addrlen = sizeof(struct sockaddr_in);
 
-    int client_socket = accept4(listening_socket, (struct sockaddr*)&client_addr, &addrlen, SOCK_NONBLOCK);
+    int client_socket = accept4(server->listening_socket, (struct sockaddr*)&client_addr, &addrlen, SOCK_NONBLOCK);
     if (client_socket < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         // finished processing all incoming connections
@@ -34,31 +33,26 @@ void accept_incoming_connections(
       }
     }
 
-    struct tunnel_conn* conn = create_tunnel_conn(telemetry_enabled, blacklist, blacklist_len);
+    // TODO: only pass server config in
+    struct tunnel_conn* conn = create_tunnel_conn(server->telemetry_enabled, server->blacklist, server->blacklist_len);
     conn->client_socket = client_socket;
     set_client_hostport(conn, &client_addr);
 
     LOG("Received connection from %s", conn->client_hostport);
 
-    // add client socket to epoll and wait for readability
-    struct epoll_accepted_cb* cb = malloc(sizeof(struct epoll_accepted_cb));
-    cb->type = cb_type_accepted;
-    cb->conn = conn;
-
-    struct epoll_event event;
-    event.events = EPOLLIN | EPOLLONESHOT;
-    event.data.ptr = cb;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) < 0) {
+    // wait for client socket readability so we can read its CONNECT HTTP request
+    if (poll_wait_for_readability(
+            p, client_socket, conn, true, false, (poll_callback)handle_client_connect_request_readability) < 0) {
       char* error_desc = errno2s(errno);
-      DEBUG_LOG("failed to add accepted client socket from %s into epoll: %s", conn->client_hostport, error_desc);
+      DEBUG_LOG(
+          "failed to add accepted client socket from %s into poll instance: %s", conn->client_hostport, error_desc);
       free(error_desc);
 
       destroy_tunnel_conn(conn);
-      free(cb);
     }
   }
 }
-
+// TODO: abstract buffer io code
 /**
  * @param read_fd
  * @param buf
@@ -91,19 +85,18 @@ ssize_t read_into_buffer(int read_fd, struct tunnel_buffer* buf) {
  * @param conn
  * @return -1 if an error occurred and conn should be closed;
  * 0 if CONNECT was found and parsed;
- * 1 if we need more bytes.
+ * 1 if we need to read more bytes.
  */
-int find_and_parse_http_connect(struct tunnel_conn* conn) {
+int read_connect_request(struct tunnel_conn* conn) {
   struct tunnel_buffer* buf = &conn->to_target_buffer;
   ssize_t n_bytes_read = read_into_buffer(conn->client_socket, buf);
 
   if (n_bytes_read < 0) {
     char* errno_desc = errno2s(errno);
-    LOG("reading for CONNECT from %s failed: %s, received %d bytes: %s",
+    LOG("reading for CONNECT from %s failed: %s, received %d bytes",
         conn->client_hostport,
         errno_desc,
-        buf->write_ptr - buf->start,
-        buf->start);
+        buf->write_ptr - buf->start);
     free(errno_desc);
     return -1;
   }
@@ -143,7 +136,7 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
 
   if (buf->write_ptr >= buf->start + BUFFER_SIZE - 1) {
     // no, the buffer is full
-    LOG("no CONNECT message from %s until buffer is full, buffer content: %s", conn->client_hostport, buf->start);
+    LOG("no CONNECT message from %s until buffer is full", conn->client_hostport);
     return -1;
   }
 
@@ -151,33 +144,22 @@ int find_and_parse_http_connect(struct tunnel_conn* conn) {
   return 1;
 }
 
-void handle_accepted_cb(int epoll_fd, struct epoll_accepted_cb* cb, uint32_t events) {
-  struct tunnel_conn* conn = cb->conn;
-
-  if (events & EPOLLERR) {
-    DEBUG_LOG("epoll reported error on tunnel connection (%s) -> (?) in accepted state", conn->client_hostport);
-  }
-
-  int result = find_and_parse_http_connect(conn);
+void handle_client_connect_request_readability(struct poll* p, struct tunnel_conn* conn) {
+  int result = read_connect_request(conn);
   if (result < 0) {
     destroy_tunnel_conn(conn);
-    free(cb);
   } else if (result == 0) {
-    // try connecting to target
-    free(cb);
-    enter_connecting_state(epoll_fd, conn);
+    // we have the full CONNECT message, let's connect to the target
+    start_connecting_to_target(p, conn);
   } else {
     // need to read more bytes, wait for readability again
-    struct epoll_event event;
-    event.events = EPOLLIN | EPOLLONESHOT;
-    event.data.ptr = cb;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn->client_socket, &event) < 0) {
+    if (poll_wait_for_readability(
+            p, conn->client_socket, conn, true, false, (poll_callback)handle_client_connect_request_readability) < 0) {
       char* error_desc = errno2s(errno);
       DEBUG_LOG("failed to re-add client socket from %s for reading CONNECT: %s", conn->client_hostport, error_desc);
       free(error_desc);
 
       destroy_tunnel_conn(conn);
-      free(cb);
     }
   }
 }

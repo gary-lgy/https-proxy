@@ -86,7 +86,7 @@ struct tunnel_conn {
   // telemetry
   bool telemetry_enabled;
   struct timespec started_at;
-  unsigned long long n_bytes_streamed;
+  unsigned long long n_bytes_transferred;
 
   // blacklist
   char** blacklist;
