@@ -44,18 +44,25 @@ struct tunnel_conn* create_tunnel_conn(bool telemetry_enabled, char** blacklist,
   return conn;
 }
 
-void destroy_tunnel_conn(struct tunnel_conn* conn) {
-  if (conn->telemetry_enabled && conn->target_host[0] != '\0' && !conn->is_blocked) {
-    struct timespec ended_at;
-    timespec_get(&ended_at, TIME_UTC);
-    unsigned int milliseconds_elapsed =
-        (ended_at.tv_sec - conn->started_at.tv_sec) * 1000 + (ended_at.tv_nsec - conn->started_at.tv_nsec) / 1000000;
-    printf(
-        "Hostname: %s, Size: %llu bytes, Time: %.3f sec\n",
-        conn->target_host,
-        conn->n_bytes_transferred,
-        milliseconds_elapsed / 1000.0);
+void print_telemetry(struct tunnel_conn* conn) {
+  if (!conn->telemetry_enabled || conn->target_hostport[0] == '\0') {
+    return;
   }
+
+  struct timespec ended_at;
+  timespec_get(&ended_at, TIME_UTC);
+  unsigned int milliseconds_elapsed =
+      (ended_at.tv_sec - conn->started_at.tv_sec) * 1000 + (ended_at.tv_nsec - conn->started_at.tv_nsec) / 1000000;
+  printf(
+      "Hostname: %s, Size: %llu bytes, Time: %.3f sec%s\n",
+      conn->target_host,
+      conn->n_bytes_transferred,
+      milliseconds_elapsed / 1000.0,
+      conn->is_blocked ? " [Blocked]" : "");
+}
+
+void destroy_tunnel_conn(struct tunnel_conn* conn) {
+  print_telemetry(conn);
 
   if (conn->client_socket_dup >= 0) {
     close(conn->client_socket_dup);

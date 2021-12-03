@@ -6,12 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "../http.h"
 #include "../lib/asyncaddrinfo/asyncaddrinfo.h"
 #include "../log.h"
 #include "../poll.h"
 #include "../util.h"
-#include "epoll_cb.h"
+#include "proxy_server.h"
 
 // Information for a connection that is in the process of connecting to the target
 struct connecting_data_block {
@@ -211,7 +210,6 @@ void start_connecting_to_target(struct poll* p, struct tunnel_conn* conn) {
   data_block->conn = conn;
 
   // Check blacklist
-  // TODO: move blacklist handling to server state
   // To handle large blacklists, we should use a specialised string matching algorithm e.g. Aho-Corasick
   char** blacklist = conn->blacklist;
   int blacklist_len = conn->blacklist_len;

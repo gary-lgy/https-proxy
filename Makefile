@@ -2,10 +2,9 @@ CC = /usr/bin/gcc
 SHELL = /usr/bin/bash
 CFLAGS = -B/usr/bin/ -Wall -Wextra --std=gnu11 -D_GNU_SOURCE
 LFLAGS = -lpthread
-SRC_FILES = proxy.c http.c log.c util.c tunnel_conn.c \
-            states/accepted.c states/connecting.c states/tunneling.c \
+SRC_FILES = main.c http.c log.c util.c poll.c \
+            proxy/tunnel_conn.c proxy/accepted.c proxy/connecting.c proxy/tunneling.c \
             lib/asyncaddrinfo/asyncaddrinfo.c \
-            poll.c proxy_server.c
 OUT_DIR = out
 BIN = proxy
 

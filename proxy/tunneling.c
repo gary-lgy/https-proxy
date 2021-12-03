@@ -7,8 +7,8 @@
 #include <unistd.h>
 #include "../log.h"
 #include "../poll.h"
-#include "../tunnel_conn.h"
 #include "../util.h"
+#include "tunnel_conn.h"
 
 // Represents a (uni-directional) link between source and destination.
 // The link alternates between two states:

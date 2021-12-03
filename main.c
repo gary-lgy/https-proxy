@@ -1,6 +1,5 @@
 #include <arpa/inet.h>
 #include <errno.h>
-#include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,8 +9,7 @@
 #include "lib/asyncaddrinfo/asyncaddrinfo.h"
 #include "log.h"
 #include "poll.h"
-#include "proxy_server.h"
-#include "states/epoll_cb.h"
+#include "proxy/proxy_server.h"
 #include "util.h"
 
 #define CONNECT_BACKLOG 512
@@ -42,7 +40,7 @@ int create_bind_listen(unsigned short port) {
 
 struct connection_thread_args {
   unsigned short thread_id;
-  struct proxy_server* config;
+  struct proxy_server* server;
 };
 
 void handle_connections(struct proxy_server* server) {
@@ -70,7 +68,7 @@ void handle_connections(struct proxy_server* server) {
 void* handle_connections_pthread_wrapper(void* raw_args) {
   struct connection_thread_args* args = raw_args;
   thread_id__ = args->thread_id;  // for logging purpose
-  handle_connections(args->config);
+  handle_connections(args->server);
   return NULL;
 }
 
@@ -167,7 +165,6 @@ int main(int argc, char** argv) {
   asyncaddrinfo_init(asyncaddrinfo_threads);
 
   // start the connection threads
-  // TODO: should this struct be server or config?
   int listening_socket = create_bind_listen(listening_port);
   struct proxy_server server = {
       .listening_socket = listening_socket,
@@ -179,7 +176,7 @@ int main(int argc, char** argv) {
   struct connection_thread_args args_list[connection_threads];
   for (int i = 0; i < connection_threads; i++) {
     args_list[i].thread_id = i;
-    args_list[i].config = &server;
+    args_list[i].server = &server;
   }
 
   pthread_t workers[connection_threads - 1];
